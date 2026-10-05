@@ -39,7 +39,6 @@ L'editor salva automaticamente una bozza locale recuperabile dal calendario dopo
 - `src/components/icon.tsx`: icone SVG riutilizzabili.
 - `src/lib/workout.ts`: tipi, dati iniziali, copie, metriche e validazione backup.
 - `src/app/globals.css`: stile e breakpoint desktop/mobile.
-- `src/app/api/health/route.ts`: endpoint GET `/api/health`.
 - `tests/workout.test.mjs`: verifica delle regole sui risultati e dei backup.
 
 ## Verifica
@@ -53,7 +52,7 @@ npx tsc --noEmit
 npm run build
 ```
 
-Per la produzione: `npm start`. Per Vercel, importa il repository Git. Un futuro backend può sostituire la persistenza locale mantenendo i tipi del dominio.
+Per la produzione locale (runtime Node): `npm start`. Un futuro backend può sostituire la persistenza locale mantenendo i tipi del dominio.
 
 
 ## Sessione: uso dei controlli
@@ -71,4 +70,15 @@ Dopo la pubblicazione con HTTPS:
 - Android / Chrome: menu del browser, Aggiungi a schermata Home oppure Installa app; apri poi dall'icona.
 - iPhone / Safari: Condividi, Aggiungi alla schermata Home; abilita Apri come app web se disponibile e apri dall'icona.
 
-Il manifest e i metadati non aggiungono supporto offline. GitHub conserva il repository; per eseguire questa app Next.js usa un hosting compatibile, come Vercel. L'installazione reale va verificata sul telefono dopo la pubblicazione. I dati restano nel browser/dispositivo usato, non vengono sincronizzati con il PC.
+Il manifest e i metadati non aggiungono supporto offline. L'installazione reale va verificata sul telefono dopo la pubblicazione. I dati restano nel browser/dispositivo usato, non vengono sincronizzati con il PC.
+
+## Deploy automatico su GitHub Pages
+
+È presente il workflow [deploy-pages.yml](./.github/workflows/deploy-pages.yml): a ogni push su `main` esegue `npm ci`, build statica Next.js (`output: "export"`) e deploy su GitHub Pages.
+
+Per attivarlo:
+- Repository GitHub → **Settings** → **Pages**.
+- In **Build and deployment**, seleziona **Source: GitHub Actions**.
+- Fai push su `main` (oppure avvia manualmente il workflow da **Actions**).
+
+L'app verrà pubblicata sotto il path del repository (esempio: `/workout-buddy`) con base path configurato automaticamente dalla pipeline.
