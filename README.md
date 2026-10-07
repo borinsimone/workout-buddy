@@ -59,7 +59,7 @@ Per la produzione locale (runtime Node): `npm start`. Un futuro backend può sos
 
 Il riquadro Set corrente mostra numero e obiettivo del prossimo set. Rivedi e correggi qualsiasi set apre l'elenco di tutti gli esercizi, inclusi quelli precedenti: puoi modificare valori, RPE e stato (eseguito, saltato, da eseguire). Una correzione non riavvia automaticamente il recupero. Se riapri un set o correggi lo stato del set corrente, il timer viene fermato per evitare di associarlo al set sbagliato.
 
-A fine recupero o esercizio a tempo compare un avviso persistente nella sessione. La scadenza del timer non completa automaticamente il set: conferma i risultati. L'avviso viene chiuso esplicitamente o all'avvio di un nuovo timer; non sono emessi suoni o notifiche di sistema.
+A fine recupero o esercizio a tempo compare un avviso persistente nella sessione. La scadenza del timer non completa automaticamente il set: conferma i risultati. L'avviso viene chiuso esplicitamente o all'avvio di un nuovo timer; il suono alla scadenza è attivo per default e disattivabile nelle preferenze. Non vengono inviate notifiche di sistema.
 
 
 ## Aggiunta alla schermata Home
@@ -82,3 +82,12 @@ Per attivarlo:
 - Fai push su `main` (oppure avvia manualmente il workflow da **Actions**).
 
 L'app verrà pubblicata sotto il path del repository (esempio: `/workout-buddy`) con base path configurato automaticamente dalla pipeline.
+
+
+## Controlli in palestra
+
+Completa set e Salta set sono fissati in basso durante la sessione, sopra la navigazione mobile. La correzione di qualsiasi set rimane disponibile nell'elenco dedicato.
+
+Il recupero appare come timer floating: trascina la maniglia per spostarlo o usa le frecce della tastiera quando la maniglia ha il focus. Il movimento resta dentro lo schermo e sopra le azioni inferiori. Tocca il timer per una vista a schermo intero, con pausa/ripresa e +30 secondi. Alla scadenza diventa verde e mostra Pronto; puoi chiuderlo o prolungarlo.
+
+Il segnale audio usa Web Audio, abilitato da una prima interazione con l'app. Il risultato con musica, altre app o schermo bloccato dipende dal browser e dal dispositivo: va verificato sul telefono. Nessuna modifica ai risultati dello storico è necessaria per usare i nuovi controlli.

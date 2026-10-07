@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "@/components/icon";
+import { RestTimer } from "@/components/rest-timer";
+import { unlockTimerAudio, playTimerAlarm } from "@/lib/timer-audio";
 import {
   clock,
   copyWorkout,
@@ -233,10 +235,12 @@ export default function WorkoutApp() {
           end: timer.end + timer.duration * 1000,
         });
       else if (timer.kind === "rest") {
-        setTimer(null);
+        setTimer({ ...timer, finished: true });
+        if (store?.timerSound !== false) playTimerAlarm();
         setTimerNotice("Recupero terminato. Puoi iniziare il prossimo set.");
         setToast("Recupero terminato. Pronto per il prossimo set.");
       } else {
+        if (store?.timerSound !== false) playTimerAlarm();
         setTimer({ ...timer, finished: true });
         setTimerNotice(
           "Tempo completato! Conferma il set per registrare il risultato."
@@ -244,7 +248,7 @@ export default function WorkoutApp() {
       }
     }, Math.max(0, timer.end - Date.now()));
     return () => clearTimeout(timeout);
-  }, [timer]);
+  }, [timer, store?.timerSound]);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 5000);
@@ -521,7 +525,15 @@ export default function WorkoutApp() {
       ? "Costruisci il tuo prossimo passo"
       : "Nuova programmazione";
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell ${view === "session" ? "session-view" : ""}`}
+      onPointerDownCapture={() => {
+        if (store.timerSound !== false) unlockTimerAudio();
+      }}
+      onKeyDownCapture={() => {
+        if (store.timerSound !== false) unlockTimerAudio();
+      }}
+    >
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate("calendar")}>
           <span className="brand-mark">
@@ -1560,28 +1572,34 @@ export default function WorkoutApp() {
                 />
               </div>
               {timer && timer.kind === "rest" && (
-                <div className="rest-card">
-                  <span className="rest-clock">{clock(left)}</span>
-                  <div>
-                    <span className="badge active">Recupero</span>
-                    <small>Prenditi il tempo che serve.</small>
-                  </div>
-                  <button
-                    className="button subtle small"
-                    onClick={() =>
-                      setTimer({ ...timer, end: timer.end + 30000 })
-                    }
-                  >
-                    +30s
-                  </button>
-                  <button
-                    className="icon-button"
-                    aria-label="Chiudi recupero"
-                    onClick={() => setTimer(null)}
-                  >
-                    ×
-                  </button>
-                </div>
+                <RestTimer
+                  seconds={left}
+                  finished={!!timer.finished}
+                  paused={timer.paused !== undefined}
+                  onExtend={() =>
+                    setTimer({
+                      ...timer,
+                      finished: false,
+                      end: Math.max(timer.end, now) + 30000,
+                      paused:
+                        timer.paused === undefined
+                          ? undefined
+                          : timer.paused + 30,
+                    })
+                  }
+                  onPause={() =>
+                    setTimer(
+                      timer.paused === undefined
+                        ? { ...timer, paused: left }
+                        : {
+                            ...timer,
+                            end: now + timer.paused * 1000,
+                            paused: undefined,
+                          }
+                    )
+                  }
+                  onClose={() => setTimer(null)}
+                />
               )}
               {current && activeEx?.mode === "time" && (
                 <div className="time-exercise">
@@ -1889,7 +1907,7 @@ export default function WorkoutApp() {
                 ))}
               </details>
               {current ? (
-                <>
+                <div className="session-actions">
                   <button
                     className="button primary full"
                     onClick={() => {
@@ -1922,7 +1940,7 @@ export default function WorkoutApp() {
                     }}
                   >
                     <Icon name="check" />
-                    Completa set
+                    Completa set {current.index + 1}
                   </button>
                   <div className="two-buttons">
                     <button
@@ -1951,7 +1969,7 @@ export default function WorkoutApp() {
                       Salta set
                     </button>
                   </div>
-                </>
+                </div>
               ) : (
                 <div className="card empty">
                   <Icon name="check" size={32} />
@@ -2232,6 +2250,18 @@ export default function WorkoutApp() {
           {view === "settings" && (
             <div className="narrow">
               <h2 className="section-title">Allenamento</h2>
+              <label className="switch-row card">
+                <span>
+                  Suono a fine timer<small>Recupero ed esercizi a tempo</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={store.timerSound !== false}
+                  onChange={(e) =>
+                    setStore({ ...store, timerSound: e.target.checked })
+                  }
+                />
+              </label>
               <div className="card">
                 <label className="preference-row">
                   <span className="icon-box">
