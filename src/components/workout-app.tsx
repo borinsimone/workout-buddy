@@ -287,17 +287,13 @@ export default function WorkoutApp() {
         : "detail"
     );
   };
-  const newDraft = (w?: Workout) => {
-    setDraft(
-      w
-        ? copyWorkout(w)
-        : {
-            id: uid(),
-            name: "",
-            notes: "",
-            sections: [{ id: uid(), name: "Allenamento", exercises: [] }],
-          }
-    );
+  const newDraft = () => {
+    setDraft({
+      id: uid(),
+      name: "",
+      notes: "",
+      sections: [{ id: uid(), name: "Allenamento", exercises: [] }],
+    });
     setScheduleDate(selectedDate);
     setSessionId("");
     navigate("editor");
@@ -318,6 +314,14 @@ export default function WorkoutApp() {
     const existing = store.sessions.find(
       (s) => s.id === sessionId && s.status === "planned"
     );
+    if (
+      program &&
+      !existing &&
+      store.templates.some((w) => w.id === draft.id)
+    ) {
+      setToast("Scheda già salvata. Per programmarla usa Copia una scheda.");
+      return;
+    }
     const planned: Session = {
       id: existing?.id ?? uid(),
       date: scheduleDate,
@@ -968,14 +972,17 @@ export default function WorkoutApp() {
                 <button
                   className="choice-card"
                   key={w.id}
-                  onClick={() => newDraft(w)}
+                  onClick={() => {
+                    setCopySource(w);
+                    setScheduleDate(selectedDate);
+                  }}
                 >
                   <span className="icon-box">
                     <Icon name="copy" />
                   </span>
                   <div>
                     <h3>{w.name}</h3>
-                    <p>{exercises(w).length} esercizi · copia indipendente</p>
+                    <p>{exercises(w).length} esercizi · programma su una data</p>
                   </div>
                   <Icon name="arrow" />
                 </button>
@@ -1399,45 +1406,47 @@ export default function WorkoutApp() {
                     <Icon name="plus" />
                     Aggiungi sezione
                   </button>
-                  <div className="card schedule-fields">
-                    <h2>Programmazione facoltativa</h2>
-                    <label className="field">
-                      Data
-                      <input
-                        required
-                        type="date"
-                        value={scheduleDate}
-                        onChange={(e) => setScheduleDate(e.target.value)}
-                        onInput={(e) => setScheduleDate(e.currentTarget.value)}
-                      />
-                    </label>
-                    <label className="field">
-                      Ora
-                      <input
-                        required
-                        type="time"
-                        value={scheduleTime}
-                        onChange={(e) => setScheduleTime(e.target.value)}
-                        onInput={(e) => setScheduleTime(e.currentTarget.value)}
-                      />
-                    </label>
-                  </div>
-                  <button
-                    className="button subtle full"
-                    onClick={() => saveDraft(false)}
-                  >
-                    <Icon name="check" />
-                    Salva solo scheda
-                  </button>
-                  <button
-                    className="button primary full"
-                    onClick={() => saveDraft(true)}
-                  >
-                    <Icon name="check" />
-                    {session?.status === "planned"
-                      ? "Aggiorna allenamento"
-                      : "Salva e programma"}
-                  </button>
+                  {(session?.status === "planned" ||
+                    !store.templates.some((w) => w.id === draft.id)) && (
+                    <>
+                      <div className="card schedule-fields">
+                        <h2>Programmazione facoltativa</h2>
+                        <label className="field">
+                          Data
+                          <input
+                            required
+                            type="date"
+                            value={scheduleDate}
+                            onChange={(e) => setScheduleDate(e.target.value)}
+                            onInput={(e) =>
+                              setScheduleDate(e.currentTarget.value)
+                            }
+                          />
+                        </label>
+                        <label className="field">
+                          Ora
+                          <input
+                            required
+                            type="time"
+                            value={scheduleTime}
+                            onChange={(e) => setScheduleTime(e.target.value)}
+                            onInput={(e) =>
+                              setScheduleTime(e.currentTarget.value)
+                            }
+                          />
+                        </label>
+                      </div>
+                      <button
+                        className="button primary full"
+                        onClick={() => saveDraft(true)}
+                      >
+                        <Icon name="check" />
+                        {session?.status === "planned"
+                          ? "Aggiorna allenamento"
+                          : "Salva e programma"}
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </div>
