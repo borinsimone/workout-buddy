@@ -37,6 +37,7 @@ export type Store = {
   sessions: Session[];
   preparation: number;
   timerSound?: boolean;
+  timerVolume?: number;
 };
 export const uid = () => crypto.randomUUID();
 export function dateKey(date: Date) {
@@ -250,6 +251,7 @@ export function validStore(value: unknown): value is Store {
   return (
     s.version === 1 &&
     (s.timerSound === undefined || typeof s.timerSound === "boolean") &&
+    (s.timerVolume === undefined || (finite(s.timerVolume) && s.timerVolume <= 100)) &&
     finite(s.preparation) &&
     s.preparation <= 60 &&
     Array.isArray(s.templates) &&

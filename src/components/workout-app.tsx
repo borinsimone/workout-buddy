@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "@/components/icon";
+import { NumberPicker } from "@/components/number-picker";
 import { RestTimer } from "@/components/rest-timer";
 import { unlockTimerAudio, playTimerAlarm } from "@/lib/timer-audio";
 import {
@@ -236,11 +237,11 @@ export default function WorkoutApp() {
         });
       else if (timer.kind === "rest") {
         setTimer({ ...timer, finished: true });
-        if (store?.timerSound !== false) playTimerAlarm();
+        if (store?.timerSound !== false) playTimerAlarm(store?.timerVolume);
         setTimerNotice("Recupero terminato. Puoi iniziare il prossimo set.");
         setToast("Recupero terminato. Pronto per il prossimo set.");
       } else {
-        if (store?.timerSound !== false) playTimerAlarm();
+        if (store?.timerSound !== false) playTimerAlarm(store?.timerVolume);
         setTimer({ ...timer, finished: true });
         setTimerNotice(
           "Tempo completato! Conferma il set per registrare il risultato."
@@ -248,7 +249,7 @@ export default function WorkoutApp() {
       }
     }, Math.max(0, timer.end - Date.now()));
     return () => clearTimeout(timeout);
-  }, [timer, store?.timerSound]);
+  }, [timer, store?.timerSound, store?.timerVolume]);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 5000);
@@ -1083,7 +1084,7 @@ export default function WorkoutApp() {
                           <>
                             <label>
                               Kg
-                              <input
+                              <NumberPicker
                                 type="number"
                                 min="0"
                                 step="0.5"
@@ -1107,7 +1108,7 @@ export default function WorkoutApp() {
                             </label>
                             <label>
                               Rip.
-                              <input
+                              <NumberPicker
                                 type="number"
                                 min="0"
                                 value={set.reps}
@@ -1132,7 +1133,7 @@ export default function WorkoutApp() {
                         ) : (
                           <label>
                             Secondi
-                            <input
+                            <NumberPicker
                               type="number"
                               min="1"
                               value={set.seconds}
@@ -1157,7 +1158,7 @@ export default function WorkoutApp() {
                         {currentDraftEx.rpe && (
                           <label>
                             RPE
-                            <input
+                            <NumberPicker
                               type="number"
                               min="0"
                               max="10"
@@ -1205,7 +1206,7 @@ export default function WorkoutApp() {
                   </div>
                   <label className="field">
                     Recupero tra i set (secondi)
-                    <input
+                    <NumberPicker
                       type="number"
                       min="0"
                       value={currentDraftEx.rest}
@@ -1802,7 +1803,7 @@ export default function WorkoutApp() {
                         </span>
                         {activeEx.mode === "weight" ? (
                           <>
-                            <input
+                            <NumberPicker
                               aria-label={`Kg effettivi set ${index + 1}`}
                               type="number"
                               step="0.5"
@@ -1817,7 +1818,7 @@ export default function WorkoutApp() {
                                 )
                               }
                             />
-                            <input
+                            <NumberPicker
                               aria-label={`Ripetizioni effettive set ${
                                 index + 1
                               }`}
@@ -1835,7 +1836,7 @@ export default function WorkoutApp() {
                             />
                           </>
                         ) : (
-                          <input
+                          <NumberPicker
                             aria-label={`Secondi effettivi set ${index + 1}`}
                             type="number"
                             min="0"
@@ -2271,6 +2272,33 @@ export default function WorkoutApp() {
                   }
                 />
               </label>
+              <div className="card timer-volume">
+                <label className="field">
+                  <span>Volume timer · {store.timerVolume ?? 80}%</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={store.timerVolume ?? 80}
+                    disabled={store.timerSound === false}
+                    onChange={(e) =>
+                      setStore({ ...store, timerVolume: Number(e.target.value) })
+                    }
+                  />
+                </label>
+                <p className="subtext">Regola anche il volume multimediale dell’iPhone.</p>
+                <button
+                  className="button subtle full"
+                  disabled={store.timerSound === false || store.timerVolume === 0}
+                  onClick={async () => {
+                    await unlockTimerAudio();
+                    playTimerAlarm(store.timerVolume);
+                  }}
+                >
+                  Prova suono
+                </button>
+              </div>
               <div className="card">
                 <label className="preference-row">
                   <span className="icon-box">
@@ -2561,7 +2589,7 @@ export default function WorkoutApp() {
                     : field === "reps"
                     ? "Ripetizioni effettive"
                     : "Durata effettiva (secondi)"}
-                  <input
+                  <NumberPicker
                     type="number"
                     min="0"
                     step={field === "kg" ? "0.5" : "1"}
@@ -2579,7 +2607,7 @@ export default function WorkoutApp() {
             )}
             <label className="field">
               RPE facoltativo
-              <input
+              <NumberPicker
                 type="number"
                 min="0"
                 max="10"
