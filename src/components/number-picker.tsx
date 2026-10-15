@@ -23,11 +23,21 @@ function Wheel({
   label: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const initial = useRef({ values, value });
+  const positioned = useRef(false);
   useEffect(() => {
-    if (ref.current)
-      ref.current.scrollTop = Math.max(0, values.indexOf(value)) * 48;
-    // Position on opening; user scrolling controls the selection afterwards.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The parent opens the dialog in an effect. Hidden dialogs have no scroll
+    // layout, so wait until it is visible before centering the current value.
+    const frame = requestAnimationFrame(() => {
+      const wheel = ref.current;
+      if (!wheel) return;
+      wheel.scrollTo({
+        top: Math.max(0, initial.current.values.indexOf(initial.current.value)) * 48,
+        behavior: "instant",
+      });
+      positioned.current = true;
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
   return (
     <div className="picker-column">
@@ -39,6 +49,7 @@ function Wheel({
         aria-label={label}
         tabIndex={0}
         onScroll={(event) => {
+          if (!positioned.current) return;
           const index = Math.max(
             0,
             Math.min(
@@ -222,7 +233,7 @@ function PickerDialog({
                   ? "Kg"
                   : max === 10
                   ? "RPE"
-                  : "Ripetizioni"
+                  : /numero.*set/i.test(title) ? "Set" : "Ripetizioni"
               }
               values={values}
               value={selected}

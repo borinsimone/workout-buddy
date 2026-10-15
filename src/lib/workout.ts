@@ -54,6 +54,37 @@ export const exercises = (workout: Workout) =>
   workout.sections.flatMap((section) => section.exercises);
 export const key = (exercise: Exercise, index: number) =>
   `${exercise.id}:${index}`;
+export function appendSessionExercise(session: Session, exercise: Exercise): Session {
+  if (session.status !== "active") return session;
+  const sectionId = `${session.id}-extra`;
+  const sections = session.workout.sections;
+  const extra = sections.find((section) => section.id === sectionId);
+  return {
+    ...session,
+    workout: {
+      ...session.workout,
+      sections: extra
+        ? sections.map((section) => section.id === sectionId
+          ? { ...section, exercises: [...section.exercises, structuredClone(exercise)] }
+          : section)
+        : [...sections, { id: sectionId, name: "Extra della sessione", exercises: [structuredClone(exercise)] }],
+    },
+  };
+}
+export function removeSessionExercise(session: Session, exerciseId: string): Session {
+  if (session.status !== "active") return session;
+  return {
+    ...session,
+    workout: {
+      ...session.workout,
+      sections: session.workout.sections.map((section) => ({
+        ...section,
+        exercises: section.exercises.filter((exercise) => exercise.id !== exerciseId),
+      })),
+    },
+    results: Object.fromEntries(Object.entries(session.results).filter(([id]) => !id.startsWith(`${exerciseId}:`))),
+  };
+}
 export function metrics(session: Session, now = Date.now()) {
   const done = exercises(session.workout)
     .flatMap((ex) =>

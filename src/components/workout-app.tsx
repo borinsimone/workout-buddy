@@ -3,9 +3,12 @@ import { useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "@/components/icon";
 import { NumberPicker } from "@/components/number-picker";
 import { RestTimer } from "@/components/rest-timer";
-import { unlockTimerAudio, playTimerAlarm } from "@/lib/timer-audio";
+import { SessionExercises } from "@/components/session-exercises";
+import { unlockTimerAudio, playTimerAlarm, playPreparationBeep } from "@/lib/timer-audio";
 import {
   clock,
+  appendSessionExercise,
+  removeSessionExercise,
   copyWorkout,
   dateKey,
   exercises,
@@ -229,13 +232,14 @@ export default function WorkoutApp() {
     if (!timer || timer.paused !== undefined || timer.finished) return;
     if (timer.end > Date.now()) queueMicrotask(() => setTimerNotice(""));
     const timeout = setTimeout(() => {
-      if (timer.kind === "prep")
+      if (timer.kind === "prep") {
+        if (store?.timerSound !== false) void playPreparationBeep(store?.timerVolume);
         setTimer({
           kind: "exercise",
           duration: timer.duration,
           end: timer.end + timer.duration * 1000,
         });
-      else if (timer.kind === "rest") {
+      } else if (timer.kind === "rest") {
         setTimer({ ...timer, finished: true });
         if (store?.timerSound !== false) playTimerAlarm(store?.timerVolume);
         setTimerNotice("Recupero terminato. Puoi iniziare il prossimo set.");
@@ -1566,6 +1570,24 @@ export default function WorkoutApp() {
           )}
           {view === "session" && session && progress && (
             <div className="narrow">
+              <SessionExercises
+                key={session.id}
+                session={session}
+                onAdd={(exercise) => {
+                  updateSession(appendSessionExercise(session, exercise));
+                  setToast("Esercizio aggiunto in fondo alla sessione.");
+                }}
+                onRemove={(exerciseId) => {
+                  updateSession(removeSessionExercise(session, exerciseId));
+                  setActuals(Object.fromEntries(Object.entries(actuals).filter(([id]) => !id.startsWith(`${exerciseId}:`))));
+                  if (activeEx?.id === exerciseId || previousSlot?.ex.id === exerciseId) {
+                    setTimer(null);
+                    setTimerNotice("");
+                  }
+                  if (editingSet?.id.startsWith(`${exerciseId}:`)) setEditingSet(null);
+                  setToast("Esercizio rimosso dalla sessione.");
+                }}
+              />
               <div className="section-heading">
                 <span className="subtext">
                   Sessione · {progress.done} di {progress.total} set eseguiti
@@ -2262,7 +2284,7 @@ export default function WorkoutApp() {
               <h2 className="section-title">Allenamento</h2>
               <label className="switch-row card">
                 <span>
-                  Suono a fine timer<small>Recupero ed esercizi a tempo</small>
+                  Suono a fine timer<small>Preparazione, recupero ed esercizi a tempo</small>
                 </span>
                 <input
                   type="checkbox"
@@ -2293,11 +2315,17 @@ export default function WorkoutApp() {
                   disabled={store.timerSound === false || store.timerVolume === 0}
                   onClick={async () => {
                     await unlockTimerAudio();
-                    playTimerAlarm(store.timerVolume);
+                    const played = await playTimerAlarm(store.timerVolume);
+                    if (!played) setToast("Audio non disponibile. Torna nell’app e riprova con lo schermo acceso.");
                   }}
                 >
                   Prova suono
                 </button>
+                <button className="text-button centered" disabled={store.timerSound === false || store.timerVolume === 0} onClick={async () => {
+                  await unlockTimerAudio();
+                  const played = await playPreparationBeep(store.timerVolume);
+                  if (!played) setToast("Audio non disponibile. Riprova con l’app visibile e lo schermo acceso.");
+                }}>Prova beep di partenza</button>
               </div>
               <div className="card">
                 <label className="preference-row">

@@ -7,7 +7,41 @@ import {
   key,
   fromSession,
   validStore,
+  appendSessionExercise,
+  removeSessionExercise,
 } from "../src/lib/workout.ts";
+
+test("live exercise changes preserve templates and other results, and survive backup validation", () => {
+  const store = initialStore();
+  const original = { ...store.sessions[0], status: "active" };
+  const [first, second] = exercises(original.workout);
+  original.results = {
+    [key(first, 0)]: { ...first.sets[0], status: "done" },
+    [key(second, 0)]: { ...second.sets[0], status: "done" },
+  };
+  const snapshot = structuredClone(original);
+  const templateSnapshot = structuredClone(store.templates);
+  const extra = { ...structuredClone(first), id: "extra-live", name: "Extra live" };
+  const added = appendSessionExercise(original, extra);
+  assert.equal(exercises(added.workout).at(-1).id, extra.id);
+  assert.deepEqual(added.results, original.results);
+  const removed = removeSessionExercise(added, first.id);
+  assert.equal(exercises(removed.workout).some(ex => ex.id === first.id), false);
+  assert.equal(removed.results[key(first, 0)], undefined);
+  assert.deepEqual(removed.results[key(second, 0)], original.results[key(second, 0)]);
+  assert.deepEqual(original, snapshot);
+  assert.deepEqual(store.templates, templateSnapshot);
+  assert.equal(validStore(JSON.parse(JSON.stringify({ ...store, sessions: [removed] }))), true);
+  let empty = removed;
+  for (const ex of exercises(empty.workout)) empty = removeSessionExercise(empty, ex.id);
+  assert.equal(metrics(empty).total, 0);
+  assert.equal(metrics(empty).done, 0);
+  assert.equal(metrics(empty).volume, 0);
+  assert.equal(exercises(appendSessionExercise(empty, extra).workout).length, 1);
+  const completed = { ...original, status: "completed" };
+  assert.equal(appendSessionExercise(completed, extra), completed);
+  assert.equal(removeSessionExercise(completed, first.id), completed);
+});
 
 test("volume excludes skipped, incomplete and timed sets", () => {
   const s = initialStore().sessions[0];
