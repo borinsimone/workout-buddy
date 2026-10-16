@@ -1554,7 +1554,8 @@ i.completed {
     color: #687680;
     font-size: 10px;
     font-weight: 700;
-    width: 30%;
+    flex: 1;
+    min-width: 0;
   }
   .mobile-nav .selected {
     color: var(--lime);
@@ -2025,6 +2026,21 @@ i.completed {
 
 .session-exercises { margin-bottom: 20px; }
 .session-exercises summary { cursor: pointer; font-weight: 700; }
+.feedback-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.feedback-form textarea { min-height: 160px; }
+.feedback-previews { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.feedback-previews figure { margin: 0; width: min(100%, 220px); }
+.feedback-previews img { display: block; width: 100%; max-width: 260px; max-height: 260px; object-fit: contain; border-radius: 12px; background: #090c0d; margin-bottom: 8px; }
+.feedback-previews a { max-width: 260px; }
+.feedback-item { margin-top: 16px; }
+.feedback-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-item .section-heading { flex-wrap: wrap; gap: 8px; }
+.live-exercise-actions { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.live-set-editor { margin: 12px 0; padding: 12px; border-radius: 12px; background: #090c0d55; }
+.live-set-editor > summary { margin-bottom: 12px; }
+.live-set-item { padding: 10px 0; border-bottom: 1px solid #343c40; }
+.live-set-item .text-button { min-width: 44px; min-height: 44px; }
+.live-set-item .section-heading { font-size: 13px; }
 .session-exercise-item { padding: 10px 0; border-bottom: 1px solid #343c40; }
 .session-exercise-item .section-heading { margin: 0; gap: 12px; }
 .session-exercise-item .text-button { flex-shrink: 0; }

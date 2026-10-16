@@ -85,6 +85,53 @@ export function removeSessionExercise(session: Session, exerciseId: string): Ses
     results: Object.fromEntries(Object.entries(session.results).filter(([id]) => !id.startsWith(`${exerciseId}:`))),
   };
 }
+export function remapRemovedSet<T>(entries: Record<string, T>, exerciseId: string, index: number): Record<string, T> {
+  const prefix = `${exerciseId}:`;
+  return Object.fromEntries(Object.entries(entries).flatMap(([id, value]) => {
+    if (!id.startsWith(prefix)) return [[id, value]];
+    const oldIndex = Number(id.slice(prefix.length));
+    return oldIndex === index ? [] : [[`${prefix}${oldIndex > index ? oldIndex - 1 : oldIndex}`, value]];
+  }));
+}
+export function changeSessionExercise(session: Session, exerciseId: string, patch: Partial<Pick<Exercise, "rest" | "sets">>): Session {
+  if (session.status !== "active") return session;
+  return { ...session, workout: { ...session.workout, sections: session.workout.sections.map(section => ({
+    ...section, exercises: section.exercises.map(ex => ex.id === exerciseId ? { ...ex, ...structuredClone(patch) } : ex),
+  })) } };
+}
+export function addSessionSet(session: Session, exerciseId: string): Session {
+  const ex = exercises(session.workout).find(ex => ex.id === exerciseId);
+  if (!ex || !ex.sets.length) return session;
+  return changeSessionExercise(session, exerciseId, { sets: [...ex.sets, { ...ex.sets.at(-1)! }] });
+}
+export function removeSessionSet(session: Session, exerciseId: string, index: number): Session {
+  const ex = exercises(session.workout).find(ex => ex.id === exerciseId);
+  if (session.status !== "active" || !ex || ex.sets.length <= 1 || !Number.isInteger(index) || index < 0 || index >= ex.sets.length) return session;
+  return { ...changeSessionExercise(session, exerciseId, { sets: ex.sets.filter((_, i) => i !== index) }),
+    results: remapRemovedSet(session.results, exerciseId, index) };
+}
+export function prioritizeSessionExercise(session: Session, exerciseId: string): Session {
+  if (session.status !== "active") return session;
+  const list = exercises(session.workout);
+  const current = list.find(ex => ex.sets.some((_, i) => !session.results[key(ex, i)]));
+  const chosen = list.find(ex => ex.id === exerciseId);
+  if (!current || !chosen || current.id === exerciseId || !chosen.sets.some((_, i) => !session.results[key(chosen, i)])) return session;
+  return { ...session, workout: { ...session.workout, sections: session.workout.sections.map(section => ({
+    ...section, exercises: section.exercises.filter(ex => ex.id !== exerciseId).flatMap(ex => ex.id === current.id ? [chosen, ex] : [ex]),
+  })) } };
+}
+export function replaceSessionExercise(session: Session, exerciseId: string, replacement: Exercise): Session {
+  if (session.status !== "active") return session;
+  const old = exercises(session.workout).find(ex => ex.id === exerciseId);
+  if (!old || !old.sets.some((_, i) => !session.results[key(old, i)]) || exercises(session.workout).some(ex => ex.id === replacement.id)) return session;
+  const recorded = old.sets.map((target, index) => ({target, result:session.results[key(old, index)]})).filter(slot => slot.result);
+  const results = Object.fromEntries(Object.entries(session.results).filter(([id]) => !id.startsWith(`${exerciseId}:`)));
+  recorded.forEach((slot, i) => { results[`${exerciseId}:${i}`] = slot.result; });
+  const retained = { ...old, sets: recorded.map(slot => slot.target) };
+  return { ...session, results, workout: { ...session.workout, sections: session.workout.sections.map(section => ({
+    ...section, exercises: section.exercises.flatMap(ex => ex.id === exerciseId ? [...(recorded.length ? [retained] : []), structuredClone(replacement)] : [ex]),
+  })) } };
+}
 export function metrics(session: Session, now = Date.now()) {
   const done = exercises(session.workout)
     .flatMap((ex) =>

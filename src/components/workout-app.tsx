@@ -4,11 +4,19 @@ import { Icon, type IconName } from "@/components/icon";
 import { NumberPicker } from "@/components/number-picker";
 import { RestTimer } from "@/components/rest-timer";
 import { SessionExercises } from "@/components/session-exercises";
+import { FeedbackForm } from "@/components/feedback-form";
+import { FeedbackAdmin } from "@/components/feedback-admin";
 import { unlockTimerAudio, playTimerAlarm, playPreparationBeep } from "@/lib/timer-audio";
 import {
   clock,
   appendSessionExercise,
   removeSessionExercise,
+  addSessionSet,
+  removeSessionSet,
+  remapRemovedSet,
+  changeSessionExercise,
+  prioritizeSessionExercise,
+  replaceSessionExercise,
   copyWorkout,
   dateKey,
   exercises,
@@ -28,12 +36,15 @@ type View =
   | "calendar"
   | "history"
   | "settings"
+  | "feedback"
+  | "feedback-admin"
   | "choose"
   | "editor"
   | "detail"
   | "session"
   | "summary";
 type Timer = {
+  exerciseId?: string;
   finished?: boolean;
   end: number;
   kind: "rest" | "prep" | "exercise";
@@ -64,6 +75,7 @@ export default function WorkoutApp() {
     [view, setView] = useState<View>("calendar");
   const [selectedDate, setSelectedDate] = useState(dateKey(new Date())),
     [sessionId, setSessionId] = useState("");
+  const [feedbackScreen, setFeedbackScreen] = useState("calendar");
   const [draft, setDraft] = useState<Workout | null>(null),
     [editExercise, setEditExercise] = useState<string | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
@@ -236,6 +248,7 @@ export default function WorkoutApp() {
         if (store?.timerSound !== false) void playPreparationBeep(store?.timerVolume);
         setTimer({
           kind: "exercise",
+          exerciseId: timer.exerciseId,
           duration: timer.duration,
           end: timer.end + timer.duration * 1000,
         });
@@ -268,6 +281,7 @@ export default function WorkoutApp() {
     );
   const session = store.sessions.find((s) => s.id === sessionId);
   const navigate = (v: View) => {
+    if (v === "feedback" && view !== "feedback" && view !== "feedback-admin") setFeedbackScreen(view);
     setView(v);
     setEditExercise(null);
   };
@@ -458,6 +472,7 @@ export default function WorkoutApp() {
       !skip && current.ex.rest
         ? {
             kind: "rest",
+            exerciseId: current.ex.id,
             duration: current.ex.rest,
             end: now + current.ex.rest * 1000,
           }
@@ -492,6 +507,15 @@ export default function WorkoutApp() {
   const previousSlot = [...slots]
     .reverse()
     .find((slot) => session?.results[slot.id]);
+  const applyLiveSession = (next: Session) => {
+    if (next === session) return;
+    const nextSlot = exercises(next.workout).flatMap(ex => ex.sets.map((_, index) => key(ex, index))).find(id => !next.results[id]);
+    updateSession(next);
+    if (nextSlot !== current?.id) {
+      setTimer(null);
+      setTimerNotice("");
+    }
+  };
   const currentDraftEx = draft
     ? exercises(draft).find((ex) => ex.id === editExercise)
     : undefined;
@@ -502,6 +526,10 @@ export default function WorkoutApp() {
       ? "Storico sessioni"
       : view === "settings"
       ? "Preferenze e dati"
+      : view === "feedback"
+      ? "Parliamone."
+      : view === "feedback-admin"
+      ? "Feedback ricevuti"
       : view === "choose"
       ? "Come vuoi iniziare?"
       : view === "editor"
@@ -523,6 +551,8 @@ export default function WorkoutApp() {
       ? `${completed.length} sessioni completate`
       : view === "settings"
       ? "Tutto sotto controllo"
+      : view === "feedback" || view === "feedback-admin"
+      ? "Miglioriamo Workout Buddy"
       : view === "session"
       ? `Esercizio ${Math.max(
           1,
@@ -558,6 +588,7 @@ export default function WorkoutApp() {
               ["calendar", "calendar", "Calendario"],
               ["history", "history", "Storico"],
               ["settings", "settings", "Preferenze e dati"],
+              ["feedback", "feedback", "Feedback"],
             ] as [View, IconName, string][]
           ).map(([v, i, label]) => (
             <button
@@ -582,7 +613,7 @@ export default function WorkoutApp() {
           <span>ALLENATI CON INTENZIONE</span>
           <span className="local-label">
             <span className="local-dot" />
-            Modalità locale
+            {view === "feedback" || view === "feedback-admin" ? "Feedback" : "Modalità locale"}
           </span>
         </header>
         <div className="content">
@@ -1587,6 +1618,40 @@ export default function WorkoutApp() {
                   if (editingSet?.id.startsWith(`${exerciseId}:`)) setEditingSet(null);
                   setToast("Esercizio rimosso dalla sessione.");
                 }}
+                onAddSet={(exerciseId) => {
+                  applyLiveSession(addSessionSet(session, exerciseId));
+                  setToast("Set aggiunto con gli obiettivi dell’ultimo.");
+                }}
+                onRemoveSet={(exerciseId, index) => {
+                  applyLiveSession(removeSessionSet(session, exerciseId, index));
+                  setActuals(remapRemovedSet(actuals, exerciseId, index));
+                  setEditingSet(null);
+                  if ((current?.ex.id === exerciseId && index <= current.index) ||
+                      (timer?.exerciseId === exerciseId && !!session.results[`${exerciseId}:${index}`])) {
+                    setTimer(null); setTimerNotice("");
+                  }
+                  setToast("Set rimosso. Gli altri risultati sono stati mantenuti.");
+                }}
+                onRest={(exerciseId, seconds) => {
+                  updateSession(changeSessionExercise(session, exerciseId, {rest: seconds}));
+                  if (timer?.kind === "rest" && !timer.finished && (timer.exerciseId ?? previousSlot?.ex.id) === exerciseId) {
+                    const remaining = timer.paused ?? Math.max(0, (timer.end - Date.now()) / 1000);
+                    const nextRemaining = Math.max(0, seconds - (timer.duration - remaining));
+                    setTimer(seconds ? {...timer, duration: seconds, end: Date.now() + nextRemaining * 1000, paused: timer.paused === undefined ? undefined : nextRemaining} : null);
+                  }
+                  setToast("Recupero aggiornato per questa sessione.");
+                }}
+                onPrioritize={(exerciseId) => {
+                  applyLiveSession(prioritizeSessionExercise(session, exerciseId));
+                  setToast("Esercizio anticipato. I risultati già registrati sono mantenuti.");
+                }}
+                onReplace={(exerciseId, replacement) => {
+                  applyLiveSession(replaceSessionExercise(session, exerciseId, replacement));
+                  setActuals(Object.fromEntries(Object.entries(actuals).filter(([id]) => !id.startsWith(`${exerciseId}:`))));
+                  setEditingSet(null);
+                  if (timer?.exerciseId === exerciseId) { setTimer(null); setTimerNotice(""); }
+                  setToast("Esercizio sostituito per i set rimanenti. Risultati precedenti conservati.");
+                }}
               />
               <div className="section-heading">
                 <span className="subtext">
@@ -1712,6 +1777,7 @@ export default function WorkoutApp() {
                         if (!timer || timer.kind === "rest")
                           setTimer({
                             kind: store.preparation ? "prep" : "exercise",
+                            exerciseId: current.ex.id,
                             duration: current.target.seconds,
                             end:
                               Date.now() +
@@ -1963,6 +2029,7 @@ export default function WorkoutApp() {
                           current.ex.rest
                             ? {
                                 kind: "rest",
+                                exerciseId: current.ex.id,
                                 duration: current.ex.rest,
                                 end: now + current.ex.rest * 1000,
                               }
@@ -2281,6 +2348,7 @@ export default function WorkoutApp() {
           )}
           {view === "settings" && (
             <div className="narrow">
+              <button className="button subtle full" onClick={() => navigate("feedback")}><Icon name="feedback" />Invia un feedback</button>
               <h2 className="section-title">Allenamento</h2>
               <label className="switch-row card">
                 <span>
@@ -2448,12 +2516,14 @@ export default function WorkoutApp() {
                 }}
               />
               <p className="note">
-                Nessun account, nessun cloud. Esporta regolarmente un backup:
+                Schede e allenamenti restano sul dispositivo. Esporta regolarmente un backup:
                 cancellare i dati del browser elimina anche quelli dell’app.
               </p>
               <p className="version">Workout Buddy · base MVP 0.1</p>
             </div>
           )}
+          {view === "feedback" && <FeedbackForm screen={feedbackScreen} onAdmin={() => navigate("feedback-admin")} />}
+          {view === "feedback-admin" && <FeedbackAdmin />}
           {deleted && (
             <div className="undo-banner">
               <Icon name="trash" />
@@ -2485,6 +2555,7 @@ export default function WorkoutApp() {
             ["calendar", "calendar", "Oggi"],
             ["history", "history", "Storico"],
             ["settings", "settings", "Dati"],
+            ["feedback", "feedback", "Feedback"],
           ] as [View, IconName, string][]
         ).map(([v, i, label]) => (
           <button

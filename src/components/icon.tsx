@@ -1,4 +1,5 @@
 export type IconName =
+  | "feedback"
   | "calendar"
   | "history"
   | "settings"
@@ -16,6 +17,7 @@ export type IconName =
   | "trophy";
 export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, string> = {
+    feedback: "M21 11a8 8 0 0 1-8 8H7l-5 3 2-6a8 8 0 1 1 17-5ZM7 9h10M7 13h6",
     calendar:
       "M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2M7 14h2m4 0h2m-8 4h2",
     history: "M3 11a9 9 0 1 1 2 7M3 4v7h7m2-5v6l4 2",

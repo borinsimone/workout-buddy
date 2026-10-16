@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+feedback-worker/.dev.vars*
+feedback-worker/wrangler.toml
+feedback-worker/.wrangler/
 
 # vercel
 .vercel

@@ -1,0 +1,15 @@
+name = "workout-buddy-feedback"
+main = "src/index.mjs"
+compatibility_date = "2026-10-15"
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:3000,https://TUO-UTENTE.github.io"
+CLOUDINARY_CLOUD_NAME = "INSERISCI_CLOUD_NAME"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "workout-buddy-feedback"
+database_id = "INSERISCI_DATABASE_ID"
+
+# Secrets: FEEDBACK_ADMIN_TOKEN, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+# Keep Workers on the Free plan. Do not enable paid plans or paid add-ons.

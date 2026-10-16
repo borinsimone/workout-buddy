@@ -39,6 +39,8 @@ jobs:
         run: npm run build
         env:
           PAGES_BASE_PATH: ${{ steps.setup_pages.outputs.base_path }}
+          NEXT_PUBLIC_FEEDBACK_API_URL: ${{ vars.NEXT_PUBLIC_FEEDBACK_API_URL }}
+          NEXT_PUBLIC_APP_VERSION: ${{ github.sha }}
 
       - name: Disable Jekyll processing
         run: touch out/.nojekyll
