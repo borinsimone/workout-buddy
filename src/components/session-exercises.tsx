@@ -2,7 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { NumberPicker } from "./number-picker";
-import { uid, key, clock, type Exercise, type Session } from "@/lib/workout";
+import { SwipeRow } from "./swipe-row";
+import { ExerciseGoalOptions, SetGoalFields } from "./exercise-goals";
+import {
+  uid,
+  key,
+  clock,
+  formatTarget,
+  type Exercise,
+  type Session,
+  type SetTarget,
+} from "@/lib/workout";
 
 function AddExercise({
   onAdd,
@@ -17,9 +27,13 @@ function AddExercise({
   const [name, setName] = useState("");
   const [mode, setMode] = useState<"weight" | "time">(source?.mode ?? "weight");
   const [count, setCount] = useState(source?.sets.length ?? 3);
-  const [kg, setKg] = useState(source?.sets[0]?.kg ?? 0);
-  const [reps, setReps] = useState(source?.sets[0]?.reps ?? 8);
-  const [seconds, setSeconds] = useState(source?.sets[0]?.seconds || 60);
+  const [target, setTarget] = useState<SetTarget>(
+    source?.sets[0] ?? { kg: 0, reps: 8, seconds: 60 }
+  );
+  const [loadType, setLoadType] = useState<Exercise["loadType"]>(
+    source?.loadType ?? "weight"
+  );
+  const [perSide, setPerSide] = useState(!!source?.perSide);
   const [rest, setRest] = useState(source?.rest ?? 90);
   const [rpe, setRpe] = useState(source?.rpe ?? false);
   useEffect(() => {
@@ -51,7 +65,9 @@ function AddExercise({
             mode,
             rest,
             rpe,
-            sets: Array.from({ length: count }, () => ({ kg, reps, seconds })),
+            loadType,
+            perSide,
+            sets: Array.from({ length: count }, () => ({ ...target })),
           });
           onClose();
         }}
@@ -85,7 +101,19 @@ function AddExercise({
           Modalità
           <select
             value={mode}
-            onChange={(e) => setMode(e.target.value as "weight" | "time")}
+            onChange={(e) => {
+              const mode = e.target.value as "weight" | "time";
+              setMode(mode);
+              if (mode === "time")
+                setTarget({
+                  ...target,
+                  seconds:
+                    target.targetMode === "max" ? 0 : target.seconds || 60,
+                  ...(target.targetMode === "range"
+                    ? { targetMode: "fixed", repsMax: undefined }
+                    : {}),
+                });
+            }}
           >
             <option value="weight">Carico e ripetizioni</option>
             <option value="time">Durata</option>
@@ -100,36 +128,18 @@ function AddExercise({
             onChange={(e) => setCount(Number(e.target.value))}
           />
         </label>
-        {mode === "weight" ? (
-          <>
-            <label className="field">
-              Carico (kg)
-              <NumberPicker
-                value={kg}
-                min={0}
-                step={0.5}
-                onChange={(e) => setKg(Number(e.target.value))}
-              />
-            </label>
-            <label className="field">
-              Ripetizioni
-              <NumberPicker
-                value={reps}
-                min={0}
-                onChange={(e) => setReps(Number(e.target.value))}
-              />
-            </label>
-          </>
-        ) : (
-          <label className="field">
-            Durata (secondi)
-            <NumberPicker
-              value={seconds}
-              min={1}
-              onChange={(e) => setSeconds(Number(e.target.value))}
-            />
-          </label>
-        )}
+        <ExerciseGoalOptions
+          exercise={{ mode, loadType, perSide }}
+          onChange={(patch) => {
+            if (patch.loadType !== undefined) setLoadType(patch.loadType);
+            if (patch.perSide !== undefined) setPerSide(patch.perSide);
+          }}
+        />
+        <SetGoalFields
+          exercise={{ mode, rpe, loadType }}
+          target={target}
+          onChange={setTarget}
+        />
         <label className="field">
           Recupero (secondi)
           <NumberPicker
@@ -163,6 +173,7 @@ export function SessionExercises({
   onRest,
   onPrioritize,
   onReplace,
+  onEditSet,
 }: {
   session: Session;
   onAdd: (exercise: Exercise) => void;
@@ -172,11 +183,13 @@ export function SessionExercises({
   onRest: (id: string, seconds: number) => void;
   onPrioritize: (id: string) => void;
   onReplace: (id: string, exercise: Exercise) => void;
+  onEditSet: (exercise: Exercise, index: number) => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [removingSet, setRemovingSet] = useState<string | null>(null);
   const [replacing, setReplacing] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const all = session.workout.sections.flatMap((section) => section.exercises);
   const current = all.find((ex) =>
     ex.sets.some((_, i) => !session.results[key(ex, i)])
@@ -193,20 +206,19 @@ export function SessionExercises({
           .flatMap((section) => section.exercises)
           .map((ex) => (
             <div className="session-exercise-item" key={ex.id}>
-              <div className="section-heading">
-                <span>
-                  <strong>{ex.name}</strong>
-                  <small className="subtext"> · {ex.sets.length} set</small>
-                </span>
-                <button
-                  type="button"
-                  className="text-button"
-                  aria-label={`Rimuovi ${ex.name}`}
-                  onClick={() => setRemoving(ex.id)}
-                >
-                  Rimuovi
-                </button>
-              </div>
+              <SwipeRow
+                label={ex.name}
+                onEdit={() => setExpanded(ex.id)}
+                onDelete={() => setRemoving(ex.id)}
+                fullSwipe
+              >
+                <div className="section-heading">
+                  <span>
+                    <strong>{ex.name}</strong>
+                    <small className="subtext"> · {ex.sets.length} set</small>
+                  </span>
+                </div>
+              </SwipeRow>
               <div className="live-exercise-actions">
                 <button
                   type="button"
@@ -230,7 +242,17 @@ export function SessionExercises({
                   Sostituisci
                 </button>
               </div>
-              <details className="live-set-editor">
+              <details
+                className="live-set-editor"
+                open={expanded === ex.id}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) setExpanded(ex.id);
+                  else
+                    setExpanded((previous) =>
+                      previous === ex.id ? null : previous
+                    );
+                }}
+              >
                 <summary>Set e recupero · {clock(ex.rest)}</summary>
                 <label className="field">
                   Recupero tra i set (secondi)
@@ -245,32 +267,28 @@ export function SessionExercises({
                   const id = key(ex, index);
                   return (
                     <div className="live-set-item" key={id}>
-                      <div className="section-heading">
-                        <span>
-                          Set {index + 1} ·{" "}
-                          {ex.mode === "time"
-                            ? `${target.seconds} sec`
-                            : `${target.kg} kg × ${target.reps}`}
-                          <small className="subtext">
-                            {" "}
-                            ·{" "}
-                            {result?.status === "done"
-                              ? "Eseguito"
-                              : result?.status === "skipped"
-                              ? "Saltato"
-                              : "Da eseguire"}
-                          </small>
-                        </span>
-                        <button
-                          type="button"
-                          className="text-button"
-                          disabled={ex.sets.length <= 1}
-                          aria-label={`Togli set ${index + 1} di ${ex.name}`}
-                          onClick={() => setRemovingSet(id)}
-                        >
-                          Togli
-                        </button>
-                      </div>
+                      <SwipeRow
+                        label={`Set ${index + 1} di ${ex.name}`}
+                        onEdit={() => onEditSet(ex, index)}
+                        onDelete={() => setRemovingSet(id)}
+                        deleteDisabled={ex.sets.length <= 1}
+                        fullSwipe
+                      >
+                        <div className="section-heading">
+                          <span>
+                            Set {index + 1} · {formatTarget(ex, target)}
+                            <small className="subtext">
+                              {" "}
+                              ·{" "}
+                              {result?.status === "done"
+                                ? "Eseguito"
+                                : result?.status === "skipped"
+                                ? "Saltato"
+                                : "Da eseguire"}
+                            </small>
+                          </span>
+                        </div>
+                      </SwipeRow>
                       {removingSet === id && (
                         <div role="group" aria-label="Conferma rimozione set">
                           <p>
@@ -309,7 +327,7 @@ export function SessionExercises({
                   + Aggiungi set
                 </button>
                 <p className="subtext">
-                  Il nuovo set riprende gli obiettivi dell’ultimo.
+                  Il nuovo set copia i valori della serie precedente.
                 </p>
               </details>
               {removing === ex.id && (

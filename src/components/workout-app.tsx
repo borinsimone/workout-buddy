@@ -6,9 +6,17 @@ import { RestTimer } from "@/components/rest-timer";
 import { SessionExercises } from "@/components/session-exercises";
 import { FeedbackForm } from "@/components/feedback-form";
 import { FeedbackAdmin } from "@/components/feedback-admin";
+import { SwipeRow } from "@/components/swipe-row";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
+import { ExerciseGoalOptions, SetGoalFields } from "@/components/exercise-goals";
+import {timerValue,beginExerciseTimer,finishPreparation,resumeTimer,completedDuration,type SessionTimer} from "@/lib/session-timer";
 import { unlockTimerAudio, playTimerAlarm, playPreparationBeep } from "@/lib/timer-audio";
 import {
   clock,
+  formatTarget,
+  formatResult,
+  formatLoad,
+  lastPerformance,
   appendSessionExercise,
   removeSessionExercise,
   addSessionSet,
@@ -43,14 +51,7 @@ type View =
   | "detail"
   | "session"
   | "summary";
-type Timer = {
-  exerciseId?: string;
-  finished?: boolean;
-  end: number;
-  kind: "rest" | "prep" | "exercise";
-  duration: number;
-  paused?: number;
-};
+type Timer = SessionTimer;
 const formatDay = (date: string) =>
   new Date(`${date}T12:00:00`).toLocaleDateString("it-IT", {
     weekday: "long",
@@ -94,10 +95,13 @@ export default function WorkoutApp() {
     [filter, setFilter] = useState("");
   const [timer, setTimer] = useState<Timer | null>(null);
   const [timerNotice, setTimerNotice] = useState("");
+  const [removingLiveSet, setRemovingLiveSet] = useState<{exerciseId:string;index:number}|null>(null);
   const [editingSet, setEditingSet] = useState<{
     id: string;
     name: string;
     mode: Exercise["mode"];
+    loadType?: Exercise["loadType"];
+    perSide?: boolean;
     index: number;
     kg: number;
     reps: number;
@@ -143,6 +147,8 @@ export default function WorkoutApp() {
                   Number.isFinite(t.end) &&
                   Number.isFinite(t.duration) &&
                   t.duration >= 0 &&
+                  (t.countUp === undefined || typeof t.countUp === "boolean") &&
+                  (!t.countUp || t.kind!=="exercise" || (typeof t.startedAt==="number" && Number.isFinite(t.startedAt))) &&
                   (t.paused === undefined ||
                     (Number.isFinite(t.paused) && t.paused >= 0))
                 )
@@ -241,17 +247,12 @@ export default function WorkoutApp() {
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!timer || timer.paused !== undefined || timer.finished) return;
+    if (!timer || timer.paused !== undefined || timer.finished || (timer.countUp && timer.kind === "exercise")) return;
     if (timer.end > Date.now()) queueMicrotask(() => setTimerNotice(""));
     const timeout = setTimeout(() => {
       if (timer.kind === "prep") {
         if (store?.timerSound !== false) void playPreparationBeep(store?.timerVolume);
-        setTimer({
-          kind: "exercise",
-          exerciseId: timer.exerciseId,
-          duration: timer.duration,
-          end: timer.end + timer.duration * 1000,
-        });
+        setTimer(finishPreparation(timer));
       } else if (timer.kind === "rest") {
         setTimer({ ...timer, finished: true });
         if (store?.timerSound !== false) playTimerAlarm(store?.timerVolume);
@@ -313,6 +314,12 @@ export default function WorkoutApp() {
       notes: "",
       sections: [{ id: uid(), name: "Allenamento", exercises: [] }],
     });
+    setScheduleDate(selectedDate);
+    setSessionId("");
+    navigate("editor");
+  };
+  const editTemplate = (workout: Workout) => {
+    setDraft(structuredClone(workout));
     setScheduleDate(selectedDate);
     setSessionId("");
     navigate("editor");
@@ -455,9 +462,7 @@ export default function WorkoutApp() {
     d.setDate(d.getDate() + i);
     return d;
   });
-  const left = timer
-    ? timer.paused ?? Math.max(0, Math.ceil((timer.end - now) / 1000))
-    : 0;
+  const left = timer ? timerValue(timer,now) : 0;
   const finishSet = (skip = false) => {
     setTimerNotice("");
     if (!session || !current) return;
@@ -504,9 +509,14 @@ export default function WorkoutApp() {
   };
   const progress = session ? metrics(session, now) : null,
     activeEx = current?.ex ?? allExercises[allExercises.length - 1];
+  const previousPerformance = session && activeEx ? lastPerformance(store.sessions,session,activeEx) : null;
   const previousSlot = [...slots]
     .reverse()
     .find((slot) => session?.results[slot.id]);
+  const openSetCorrection = (ex: Exercise, index: number) => {
+    const id=key(ex,index), result=session?.results[id];
+    setEditingSet({id, name:ex.name, mode:ex.mode, loadType:ex.loadType, perSide:ex.perSide, index, ...(result ?? actuals[id] ?? ex.sets[index]), status:result?.status ?? "pending"});
+  };
   const applyLiveSession = (next: Session) => {
     if (next === session) return;
     const nextSlot = exercises(next.workout).flatMap(ex => ex.sets.map((_, index) => key(ex, index))).find(id => !next.results[id]);
@@ -519,6 +529,23 @@ export default function WorkoutApp() {
   const currentDraftEx = draft
     ? exercises(draft).find((ex) => ex.id === editExercise)
     : undefined;
+  const removeLiveSet = (exerciseId:string,index:number) => {
+    if(!session)return;
+    applyLiveSession(removeSessionSet(session,exerciseId,index));
+    setActuals(remapRemovedSet(actuals,exerciseId,index));
+    setEditingSet(null);
+    if((current?.ex.id===exerciseId&&index<=current.index)||(timer?.exerciseId===exerciseId&&!!session.results[`${exerciseId}:${index}`])){setTimer(null);setTimerNotice("");}
+    setToast("Set rimosso. Gli altri risultati sono stati mantenuti.");
+  };
+  const addLiveSet = (exerciseId:string) => {
+    if(!session)return;
+    const ex=allExercises.find(ex=>ex.id===exerciseId);
+    if(ex){const previousId=key(ex,ex.sets.length-1),previous=session.results[previousId]??actuals[previousId]??ex.sets.at(-1)!;
+      setActuals({...actuals,[key(ex,ex.sets.length)]:{kg:previous.kg,reps:previous.reps,seconds:previous.seconds,rpe:previous.rpe}});
+    }
+    applyLiveSession(addSessionSet(session,exerciseId,actuals));
+    setToast("Set aggiunto copiando i valori della serie precedente.");
+  };
   const title =
     view === "calendar"
       ? "Il tuo allenamento."
@@ -565,7 +592,7 @@ export default function WorkoutApp() {
       : "Nuova programmazione";
   return (
     <div
-      className={`app-shell ${view === "session" ? "session-view" : ""}`}
+      className={`app-shell ${view === "session" ? "session-view" : view === "detail" ? "detail-view" : ""}`}
       onPointerDownCapture={() => {
         if (store.timerSound !== false) unlockTimerAudio();
       }}
@@ -925,14 +952,13 @@ export default function WorkoutApp() {
                       <span className="count">{store.templates.length}</span>
                     </div>
                     {store.templates.map((w) => (
-                      <div className="template-row" key={w.id}>
+                      <SwipeRow key={w.id} label={w.name} onEdit={() => editTemplate(w)} onDelete={() => {
+                        setStore({...store, templates:store.templates.filter(t => t.id !== w.id)});
+                        setToast("Scheda eliminata. Le sessioni rimangono nello storico.");
+                      }}>
+                      <div className="template-row">
                         <button
-                          onClick={() => {
-                            setDraft(structuredClone(w));
-                            setScheduleDate(selectedDate);
-                            setSessionId("");
-                            navigate("editor");
-                          }}
+                          onClick={() => editTemplate(w)}
                         >
                           <span className="icon-box">
                             <Icon name="weight" />
@@ -946,24 +972,8 @@ export default function WorkoutApp() {
                           </span>
                           <Icon name="arrow" size={16} />
                         </button>
-                        <button
-                          className="icon-button"
-                          aria-label={`Elimina scheda ${w.name}`}
-                          onClick={() => {
-                            setStore({
-                              ...store,
-                              templates: store.templates.filter(
-                                (t) => t.id !== w.id
-                              ),
-                            });
-                            setToast(
-                              "Scheda eliminata. Le sessioni rimangono nello storico."
-                            );
-                          }}
-                        >
-                          <Icon name="trash" size={16} />
-                        </button>
                       </div>
+                      </SwipeRow>
                     ))}
                     <button className="text-button" onClick={() => newDraft()}>
                       <Icon name="plus" size={17} />
@@ -1072,7 +1082,7 @@ export default function WorkoutApp() {
                       className={
                         currentDraftEx.mode === "time" ? "selected" : ""
                       }
-                      onClick={() => edit(currentDraftEx.id, { mode: "time" })}
+                      onClick={() => edit(currentDraftEx.id, { mode: "time", sets:currentDraftEx.sets.map(set => ({...set,seconds:set.targetMode==="max"?0:set.seconds||60,...(set.targetMode==="range"?{targetMode:"fixed" as const,repsMax:undefined}:{})})) })}
                     >
                       Durata
                     </button>
@@ -1086,6 +1096,7 @@ export default function WorkoutApp() {
                       }
                     />
                   </label>
+                  <ExerciseGoalOptions exercise={currentDraftEx} onChange={patch=>edit(currentDraftEx.id,patch)} />
                   <div className="section-heading">
                     <h2>
                       Obiettivi{" "}
@@ -1112,131 +1123,16 @@ export default function WorkoutApp() {
                     </button>
                   </div>
                   <div className="card set-config">
+                    <p className="subtext">Scorri una serie verso sinistra per modificarla o eliminarla.</p>
                     {currentDraftEx.sets.map((set, i) => (
-                      <div className="config-row" key={i}>
-                        <span className="set-index">{i + 1}</span>
-                        {currentDraftEx.mode === "weight" ? (
-                          <>
-                            <label>
-                              Kg
-                              <NumberPicker
-                                type="number"
-                                min="0"
-                                step="0.5"
-                                value={set.kg}
-                                onChange={(e) =>
-                                  edit(currentDraftEx.id, {
-                                    sets: currentDraftEx.sets.map((s, index) =>
-                                      index === i
-                                        ? {
-                                            ...s,
-                                            kg: Math.max(
-                                              0,
-                                              Number(e.target.value)
-                                            ),
-                                          }
-                                        : s
-                                    ),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label>
-                              Rip.
-                              <NumberPicker
-                                type="number"
-                                min="0"
-                                value={set.reps}
-                                onChange={(e) =>
-                                  edit(currentDraftEx.id, {
-                                    sets: currentDraftEx.sets.map((s, index) =>
-                                      index === i
-                                        ? {
-                                            ...s,
-                                            reps: Math.max(
-                                              0,
-                                              Number(e.target.value)
-                                            ),
-                                          }
-                                        : s
-                                    ),
-                                  })
-                                }
-                              />
-                            </label>
-                          </>
-                        ) : (
-                          <label>
-                            Secondi
-                            <NumberPicker
-                              type="number"
-                              min="1"
-                              value={set.seconds}
-                              onChange={(e) =>
-                                edit(currentDraftEx.id, {
-                                  sets: currentDraftEx.sets.map((s, index) =>
-                                    index === i
-                                      ? {
-                                          ...s,
-                                          seconds: Math.max(
-                                            1,
-                                            Number(e.target.value)
-                                          ),
-                                        }
-                                      : s
-                                  ),
-                                })
-                              }
-                            />
-                          </label>
-                        )}
-                        {currentDraftEx.rpe && (
-                          <label>
-                            RPE
-                            <NumberPicker
-                              type="number"
-                              min="0"
-                              max="10"
-                              value={set.rpe ?? ""}
-                              onChange={(e) =>
-                                edit(currentDraftEx.id, {
-                                  sets: currentDraftEx.sets.map((s, index) =>
-                                    index === i
-                                      ? {
-                                          ...s,
-                                          rpe:
-                                            e.target.value === ""
-                                              ? undefined
-                                              : Math.min(
-                                                  10,
-                                                  Math.max(
-                                                    0,
-                                                    Number(e.target.value)
-                                                  )
-                                                ),
-                                        }
-                                      : s
-                                  ),
-                                })
-                              }
-                            />
-                          </label>
-                        )}
-                        <button
-                          className="icon-button"
-                          disabled={currentDraftEx.sets.length === 1}
-                          aria-label={`Elimina set ${i + 1}`}
-                          onClick={() =>
-                            edit(currentDraftEx.id, {
-                              sets: currentDraftEx.sets.filter(
-                                (_, index) => index !== i
-                              ),
-                            })
-                          }
-                        >
-                          <Icon name="trash" size={16} />
-                        </button>
-                      </div>
+                      <SwipeRow key={i} label={`Set ${i + 1}`} editInline deleteDisabled={currentDraftEx.sets.length === 1} onDelete={() => edit(currentDraftEx.id, {
+                        sets: currentDraftEx.sets.filter((_, index) => index !== i),
+                      })}>
+                      <div className="goal-set">
+  <strong className="goal-set-title">Set {i + 1}</strong>
+  <SetGoalFields exercise={currentDraftEx} target={set} onChange={next => edit(currentDraftEx.id, {sets:currentDraftEx.sets.map((old,index) => index===i?next:old)})}/>
+</div>
+</SwipeRow>
                     ))}
                   </div>
                   <label className="field">
@@ -1303,6 +1199,7 @@ export default function WorkoutApp() {
                   </div>
                   {draft.sections.map((section, index) => (
                     <section className="card editor-section" key={section.id}>
+                      <SwipeRow label={`Sezione ${section.name}`} editInline onDelete={() => setDraft({...draft,sections:draft.sections.filter(sec=>sec.id!==section.id)})}>
                       <div className="section-heading">
                         <input
                           aria-label="Nome sezione"
@@ -1334,23 +1231,13 @@ export default function WorkoutApp() {
                         >
                           ↑
                         </button>
-                        <button
-                          className="icon-button"
-                          aria-label="Elimina sezione"
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              sections: draft.sections.filter(
-                                (sec) => sec.id !== section.id
-                              ),
-                            })
-                          }
-                        >
-                          <Icon name="trash" size={16} />
-                        </button>
                       </div>
+                      </SwipeRow>
                       {section.exercises.map((ex) => (
-                        <div className="exercise-row" key={ex.id}>
+                        <SwipeRow key={ex.id} label={ex.name} onEdit={() => setEditExercise(ex.id)} onDelete={() => setDraft({
+                          ...draft, sections: draft.sections.map(sec => sec.id === section.id ? {...sec, exercises:sec.exercises.filter(item => item.id !== ex.id)} : sec),
+                        })}>
+                        <div className="exercise-row">
                           <button onClick={() => setEditExercise(ex.id)}>
                             <span className="icon-box">
                               <Icon
@@ -1361,36 +1248,14 @@ export default function WorkoutApp() {
                               <strong>{ex.name}</strong>
                               <small>
                                 {ex.sets.length} set ·{" "}
-                                {ex.mode === "weight"
-                                  ? `${ex.sets[0].kg} kg × ${ex.sets[0].reps}`
-                                  : `${ex.sets[0].seconds} sec`}{" "}
+                                {formatTarget(ex,ex.sets[0])}{" "}
                                 · recupero {clock(ex.rest)}
                               </small>
                             </span>
                             <Icon name="arrow" size={16} />
                           </button>
-                          <button
-                            className="icon-button"
-                            aria-label={`Elimina ${ex.name}`}
-                            onClick={() =>
-                              setDraft({
-                                ...draft,
-                                sections: draft.sections.map((sec) =>
-                                  sec.id === section.id
-                                    ? {
-                                        ...sec,
-                                        exercises: sec.exercises.filter(
-                                          (item) => item.id !== ex.id
-                                        ),
-                                      }
-                                    : sec
-                                ),
-                              })
-                            }
-                          >
-                            <Icon name="trash" size={16} />
-                          </button>
                         </div>
+                        </SwipeRow>
                       ))}
                       <button
                         className="text-button centered"
@@ -1510,17 +1375,6 @@ export default function WorkoutApp() {
                 <h2>
                   Esercizi <span className="count">{allExercises.length}</span>
                 </h2>
-                <button
-                  className="text-button"
-                  onClick={() => {
-                    setDraft(structuredClone(session.workout));
-                    setScheduleDate(session.date);
-                    setScheduleTime(session.time);
-                    navigate("editor");
-                  }}
-                >
-                  Modifica
-                </button>
               </div>
               <div className="card">
                 {session.workout.sections.map((sec) => (
@@ -1537,11 +1391,7 @@ export default function WorkoutApp() {
                           <strong>{ex.name}</strong>
                           <small>
                             {ex.sets.length} set ·{" "}
-                            {ex.mode === "weight"
-                              ? `${ex.sets[0].kg || "PC"} × ${
-                                  ex.sets[0].reps
-                                } rip`
-                              : `${ex.sets[0].seconds} secondi`}
+                            {formatTarget(ex,ex.sets[0])}
                           </small>
                         </div>
                         <span className="subtext">{clock(ex.rest)}</span>
@@ -1553,6 +1403,7 @@ export default function WorkoutApp() {
               {session.workout.notes && (
                 <p className="note">{session.workout.notes}</p>
               )}
+              <div className="detail-actions" role="group" aria-label="Azioni allenamento">
               <button
                 className="button primary full"
                 onClick={() => {
@@ -1568,7 +1419,20 @@ export default function WorkoutApp() {
                 Inizia sessione
               </button>
               <button
+                className="button subtle"
+                onClick={() => {
+                  setDraft(structuredClone(session.workout));
+                  setScheduleDate(session.date);
+                  setScheduleTime(session.time);
+                  navigate("editor");
+                }}
+              >
+                <Icon name="settings" />
+                Modifica
+              </button>
+              <button
                 className="button subtle full"
+                aria-label="Sposta data e ora"
                 onClick={() => {
                   setMoveId(session.id);
                   setScheduleDate(session.date);
@@ -1576,18 +1440,18 @@ export default function WorkoutApp() {
                 }}
               >
                 <Icon name="calendar" />
-                Sposta data e ora
+                Sposta
               </button>
-              <div className="two-buttons">
                 <button
                   className="button subtle"
+                  aria-label="Copia su una data"
                   onClick={() => {
                     setCopySource(session.workout);
                     setScheduleDate(selectedDate);
                   }}
                 >
                   <Icon name="copy" />
-                  Copia su una data
+                  Copia
                 </button>
                 <button
                   className="button danger"
@@ -1604,6 +1468,7 @@ export default function WorkoutApp() {
               <SessionExercises
                 key={session.id}
                 session={session}
+                onEditSet={openSetCorrection}
                 onAdd={(exercise) => {
                   updateSession(appendSessionExercise(session, exercise));
                   setToast("Esercizio aggiunto in fondo alla sessione.");
@@ -1618,20 +1483,8 @@ export default function WorkoutApp() {
                   if (editingSet?.id.startsWith(`${exerciseId}:`)) setEditingSet(null);
                   setToast("Esercizio rimosso dalla sessione.");
                 }}
-                onAddSet={(exerciseId) => {
-                  applyLiveSession(addSessionSet(session, exerciseId));
-                  setToast("Set aggiunto con gli obiettivi dell’ultimo.");
-                }}
-                onRemoveSet={(exerciseId, index) => {
-                  applyLiveSession(removeSessionSet(session, exerciseId, index));
-                  setActuals(remapRemovedSet(actuals, exerciseId, index));
-                  setEditingSet(null);
-                  if ((current?.ex.id === exerciseId && index <= current.index) ||
-                      (timer?.exerciseId === exerciseId && !!session.results[`${exerciseId}:${index}`])) {
-                    setTimer(null); setTimerNotice("");
-                  }
-                  setToast("Set rimosso. Gli altri risultati sono stati mantenuti.");
-                }}
+                onAddSet={addLiveSet}
+                onRemoveSet={removeLiveSet}
                 onRest={(exerciseId, seconds) => {
                   updateSession(changeSessionExercise(session, exerciseId, {rest: seconds}));
                   if (timer?.kind === "rest" && !timer.finished && (timer.exerciseId ?? previousSlot?.ex.id) === exerciseId) {
@@ -1704,7 +1557,7 @@ export default function WorkoutApp() {
                     className="timer-ring"
                     style={{
                       background: `conic-gradient(var(--lime) ${
-                        timer && timer.kind !== "rest"
+                        timer?.countUp && timer.kind === "exercise" ? 100 : timer && timer.kind !== "rest"
                           ? Math.min(
                               100,
                               Math.max(
@@ -1743,13 +1596,13 @@ export default function WorkoutApp() {
                             : current.target.seconds
                         )}
                       </strong>
-                      <small>obiettivo {current.target.seconds} secondi</small>
+                      <small>{current.target.targetMode==="max"?"Cronometro · completa il set per fermarlo":`obiettivo ${current.target.seconds} secondi`}</small>
                     </div>
                   </div>
                   <div className="timer-controls">
                     <button
                       className="button subtle small"
-                      disabled={!timer || timer.kind !== "exercise"}
+                      disabled={!timer || timer.kind !== "exercise" || timer.countUp}
                       onClick={() => {
                         if (timer)
                           setTimer({
@@ -1775,21 +1628,9 @@ export default function WorkoutApp() {
                       }
                       onClick={() => {
                         if (!timer || timer.kind === "rest")
-                          setTimer({
-                            kind: store.preparation ? "prep" : "exercise",
-                            exerciseId: current.ex.id,
-                            duration: current.target.seconds,
-                            end:
-                              Date.now() +
-                              (store.preparation || current.target.seconds) *
-                                1000,
-                          });
+                          {setTimerNotice("");setTimer(beginExerciseTimer(current.target.seconds,store.preparation,Date.now(),current.ex.id,current.target.targetMode==="max"));}
                         else if (timer.paused !== undefined)
-                          setTimer({
-                            ...timer,
-                            end: Date.now() + timer.paused * 1000,
-                            paused: undefined,
-                          });
+                          setTimer(resumeTimer(timer,Date.now()));
                         else setTimer({ ...timer, paused: left });
                       }}
                     >
@@ -1803,7 +1644,7 @@ export default function WorkoutApp() {
                     </button>
                     <button
                       className="button subtle small"
-                      disabled={!timer || timer.kind !== "exercise"}
+                      disabled={!timer || timer.kind !== "exercise" || timer.countUp}
                       onClick={() => {
                         if (timer)
                           setTimer({
@@ -1832,11 +1673,7 @@ export default function WorkoutApp() {
                         Set {current.index + 1} di {current.ex.sets.length}
                       </strong>
                       <span className="subtext">
-                        {current.ex.mode === "weight"
-                          ? `${current.target.kg || "PC"} × ${
-                              current.target.reps
-                            } ripetizioni`
-                          : `${current.target.seconds} secondi`}
+                        {formatTarget(current.ex,current.target)}
                       </span>
                     </div>
                   )}
@@ -1864,13 +1701,15 @@ export default function WorkoutApp() {
                         : "SECONDI EFFETTIVI"}
                     </span>
                   </div>
+                  <p className="subtext previous-session-label">{previousPerformance ? `Ultima sessione: ${previousPerformance.session.date.split('-').reverse().join('/')}` : "Nessuna prestazione precedente disponibile per questo esercizio."}</p>
+                  {(activeEx.loadType==="bodyweight"||activeEx.perSide)&&<p className="subtext">{activeEx.loadType==="bodyweight"?"Peso corporeo: nei kg inserisci solo l’eventuale sovraccarico. ":""}{activeEx.perSide?"Registra ripetizioni o secondi per ciascun lato.":""}</p>}
                   {activeEx.sets.map((target, index) => {
                     const id = key(activeEx, index),
                       result = session.results[id],
                       value = result ?? actuals[id] ?? target;
                     return (
+                      <SwipeRow key={id} label={`Set ${index + 1} di ${activeEx.name}`} onEdit={() => openSetCorrection(activeEx,index)} editLabel="Correggi" onDelete={() => setRemovingLiveSet({exerciseId:activeEx.id,index})} deleteDisabled={activeEx.sets.length <= 1} fullSwipe>
                       <div
-                        key={id}
                         className={`set-row ${
                           current?.id === id ? "current" : ""
                         } ${result?.status === "done" ? "done" : ""}`}
@@ -1885,9 +1724,7 @@ export default function WorkoutApp() {
                           )}
                         </span>
                         <span className="target">
-                          {activeEx.mode === "weight"
-                            ? `${target.kg || "PC"} × ${target.reps}`
-                            : `${target.seconds} sec`}
+                          {formatTarget(activeEx,target)}
                         </span>
                         {activeEx.mode === "weight" ? (
                           <>
@@ -1940,8 +1777,13 @@ export default function WorkoutApp() {
                           />
                         )}
                       </div>
+                      {previousPerformance && <p className="last-performance">{previousPerformance.sets[index] ? `Ultima volta: ${formatResult(previousPerformance.exercise,previousPerformance.sets[index]!)}` : "Ultima volta: nessun risultato eseguito per questo set."}</p>}
+                      </SwipeRow>
                     );
                   })}
+                  <button type="button" className="button subtle full" onClick={() => addLiveSet(activeEx.id)}>
+                    <Icon name="plus" /> Aggiungi set
+                  </button>
                 </>
               )}
               {current?.ex.rpe && (
@@ -1981,6 +1823,8 @@ export default function WorkoutApp() {
                               id,
                               name: ex.name,
                               mode: ex.mode,
+                              loadType: ex.loadType,
+                              perSide: ex.perSide,
                               index,
                               ...(result ?? actuals[id] ?? target),
                               status: result?.status ?? "pending",
@@ -1993,9 +1837,7 @@ export default function WorkoutApp() {
                               ? "Da eseguire"
                               : result.status === "skipped"
                               ? "Saltato"
-                              : ex.mode === "time"
-                              ? `${result.seconds} sec`
-                              : `${result.kg || "PC"} kg × ${result.reps}`}
+                              : formatResult(ex,result)}
                           </span>
                           <span className="lime">Correggi</span>
                         </button>
@@ -2008,6 +1850,7 @@ export default function WorkoutApp() {
                 <div className="session-actions">
                   <button
                     className="button primary full"
+                    disabled={timer?.kind === "prep"}
                     onClick={() => {
                       setTimerNotice("");
                       if (
@@ -2020,7 +1863,7 @@ export default function WorkoutApp() {
                             ...session.results,
                             [current.id]: {
                               ...actual,
-                              seconds: Math.max(0, timer.duration - left),
+                              seconds: completedDuration(timer,now),
                               status: "done",
                             },
                           },
@@ -2147,7 +1990,7 @@ export default function WorkoutApp() {
                     )
                     .flatMap((s) =>
                       exercises(s.workout)
-                        .filter((e) => e.name === ex.name && e.mode === ex.mode)
+                        .filter((e) => e.name === ex.name && e.mode === ex.mode && (e.loadType??"weight")===(ex.loadType??"weight") && !!e.perSide===!!ex.perSide)
                         .flatMap((e) =>
                           e.sets
                             .map((_, i) => s.results[key(e, i)])
@@ -2184,11 +2027,7 @@ export default function WorkoutApp() {
                                 ? "incompleto"
                                 : r.status === "skipped"
                                 ? "saltato"
-                                : ex.mode === "time"
-                                ? clock(r.seconds)
-                                : `${r.kg || "PC"}×${r.reps}${
-                                    r.rpe ? ` (RPE ${r.rpe})` : ""
-                                  }`;
+                                : formatResult(ex,r);
                             })
                             .join(" · ")}
                         </p>
@@ -2198,7 +2037,7 @@ export default function WorkoutApp() {
                           {bestSet
                             ? ex.mode === "time"
                               ? clock(best)
-                              : `${number(best)} kg × ${bestSet.reps}`
+                              : `${formatLoad(ex,best)} × ${bestSet.reps}`
                             : "—"}
                         </span>
                         {done.length > 0 && best > previousBest && (
@@ -2307,9 +2146,9 @@ export default function WorkoutApp() {
                 .map((s) => {
                   const m = metrics(s);
                   return (
+                    <SwipeRow key={s.id} label={`${s.workout.name}, ${formatDay(s.date)}`} editLabel="Dettagli" onEdit={() => openSession(s)} onDelete={() => removeSession(s)} fullSwipe>
                     <button
                       className="history-row card"
-                      key={s.id}
                       onClick={() => openSession(s)}
                     >
                       <span className="date-tile">
@@ -2333,6 +2172,7 @@ export default function WorkoutApp() {
                       </span>
                       <Icon name="arrow" size={18} />
                     </button>
+                    </SwipeRow>
                   );
                 })}
               {!completed.length && (
@@ -2568,6 +2408,11 @@ export default function WorkoutApp() {
           </button>
         ))}
       </nav>
+      {removingLiveSet && <ConfirmationDialog
+        message={`Il set ${removingLiveSet.index + 1} e il suo eventuale risultato verranno rimossi da questa sessione.`}
+        onCancel={() => setRemovingLiveSet(null)}
+        onConfirm={() => {removeLiveSet(removingLiveSet.exerciseId,removingLiveSet.index);setRemovingLiveSet(null);}}
+      />}
       {toast && (
         <div className="toast" role="status">
           {toast}
@@ -2684,7 +2529,7 @@ export default function WorkoutApp() {
               (field) => (
                 <label className="field" key={field}>
                   {field === "kg"
-                    ? "Carico effettivo (kg)"
+                    ? editingSet.loadType==="bodyweight" ? "Kg extra (0 = peso corporeo)" : "Carico effettivo (kg)"
                     : field === "reps"
                     ? "Ripetizioni effettive"
                     : "Durata effettiva (secondi)"}

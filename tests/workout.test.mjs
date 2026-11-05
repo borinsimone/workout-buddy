@@ -128,6 +128,26 @@ test("live exercise changes preserve templates and other results, and survive ba
   assert.equal(removeSessionExercise(completed, first.id), completed);
 });
 
+test("new set copies visible values above, without copying completion or changing previous results", () => {
+  const store=initialStore();
+  const session={...store.sessions[0],status:"active",results:{}};
+  const ex=exercises(session.workout)[0], last=key(ex,ex.sets.length-1);
+  const actuals={[last]:{kg:67.5,reps:11,seconds:0,rpe:8}};
+  const pending=addSessionSet(session,ex.id,actuals);
+  assert.deepEqual(exercises(pending.workout)[0].sets.at(-1),actuals[last]);
+  assert.equal(pending.results[key(ex,ex.sets.length)],undefined);
+  session.results[last]={...actuals[last],kg:75,reps:8,status:"done"};
+  const snapshot=structuredClone(session);
+  const done=addSessionSet(session,ex.id,actuals);
+  const copied=exercises(done.workout)[0].sets.at(-1);
+  assert.equal(copied.kg,75);
+  assert.equal(copied.reps,8);
+  assert.equal(copied.status,undefined);
+  assert.deepEqual(done.results,session.results);
+  assert.deepEqual(session,snapshot);
+  assert.equal(metrics(done).done,metrics(session).done);
+  assert.equal(validStore({...store,sessions:[done]}),true);
+});
 test("volume excludes skipped, incomplete and timed sets", () => {
   const s = initialStore().sessions[0];
   const [weight, , , timed] = exercises(s.workout);

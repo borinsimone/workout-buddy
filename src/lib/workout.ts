@@ -1,10 +1,15 @@
 export type SetTarget = {
+  targetMode?: "fixed" | "range" | "max";
+  repsMax?: number;
   kg: number;
   reps: number;
   seconds: number;
   rpe?: number;
 };
 export type Exercise = {
+  historyId?: string;
+  loadType?: "weight" | "bodyweight";
+  perSide?: boolean;
   id: string;
   name: string;
   mode: "weight" | "time";
@@ -19,7 +24,7 @@ export type Workout = {
   notes: string;
   sections: Section[];
 };
-export type Result = SetTarget & { status: "done" | "skipped" };
+export type Result = Pick<SetTarget, "kg" | "reps" | "seconds" | "rpe"> & { status: "done" | "skipped" };
 export type Session = {
   id: string;
   date: string;
@@ -54,6 +59,37 @@ export const exercises = (workout: Workout) =>
   workout.sections.flatMap((section) => section.exercises);
 export const key = (exercise: Exercise, index: number) =>
   `${exercise.id}:${index}`;
+export function formatLoad(exercise: Exercise, kg: number) {
+  const value=kg.toLocaleString("it-IT");
+  return exercise.loadType === "bodyweight" ? kg ? `PC + ${value} kg` : "PC" : `${value} kg`;
+}
+export function formatTarget(exercise: Exercise, target: SetTarget) {
+  const reps=target.targetMode === "max" ? "max" : target.targetMode === "range" ? `${target.reps}–${target.repsMax ?? target.reps}` : String(target.reps);
+  const value=exercise.mode === "time" ? target.targetMode === "max" ? "Tempo max" : `${target.seconds} sec` : `${formatLoad(exercise,target.kg)} × ${reps}`;
+  return value+(exercise.perSide ? " per lato" : "");
+}
+export function formatResult(exercise: Exercise, result: Result) {
+  return (exercise.mode === "time" ? `${result.seconds} sec` : `${formatLoad(exercise,result.kg)} × ${result.reps}`)+(exercise.perSide ? " per lato" : "")+(result.rpe === undefined ? "" : ` · RPE ${result.rpe}`);
+}
+export function lastPerformance(sessions: Session[], current: Session, exercise: Exercise): {session:Session; exercise:Exercise; sets:(Result|null)[]} | null {
+  const stamp=(session:Session)=>session.endedAt ?? session.startedAt ?? new Date(`${session.date}T${session.time}:00`).getTime();
+  const before=current.startedAt ?? new Date(`${current.date}T${current.time}:00`).getTime();
+  const normalize=(name:string)=>name.normalize("NFKC").trim().replace(/\s+/g," ").toLocaleLowerCase("it-IT");
+  const compatible=(other:Exercise)=>other.mode===exercise.mode && (other.loadType??"weight")===(exercise.loadType??"weight") && !!other.perSide===!!exercise.perSide;
+  for(const session of sessions.filter(s=>s.id!==current.id&&s.status==="completed"&&stamp(s)<before).sort((a,b)=>stamp(b)-stamp(a))) {
+    const list=exercises(session.workout).filter(compatible);
+    let matches=list.filter(ex=>(ex.historyId??ex.id)===(exercise.historyId??exercise.id) && normalize(ex.name)===normalize(exercise.name));
+    if(!matches.length) matches=list.filter(ex=>normalize(ex.name)===normalize(exercise.name));
+    if(matches.length!==1)continue;
+    const previous=matches[0];
+    const sets=previous.sets.map((_,index)=>{
+      const result=session.results[key(previous,index)];
+      return result?.status==="done" ? result : null;
+    });
+    if(sets.some(Boolean))return {session,exercise:previous,sets};
+  }
+  return null;
+}
 export function appendSessionExercise(session: Session, exercise: Exercise): Session {
   if (session.status !== "active") return session;
   const sectionId = `${session.id}-extra`;
@@ -99,10 +135,15 @@ export function changeSessionExercise(session: Session, exerciseId: string, patc
     ...section, exercises: section.exercises.map(ex => ex.id === exerciseId ? { ...ex, ...structuredClone(patch) } : ex),
   })) } };
 }
-export function addSessionSet(session: Session, exerciseId: string): Session {
+export function addSessionSet(session: Session, exerciseId: string, actuals: Record<string, SetTarget> = {}): Session {
   const ex = exercises(session.workout).find(ex => ex.id === exerciseId);
   if (!ex || !ex.sets.length) return session;
-  return changeSessionExercise(session, exerciseId, { sets: [...ex.sets, { ...ex.sets.at(-1)! }] });
+  const previousId = key(ex, ex.sets.length - 1);
+  const previous = session.results[previousId] ?? actuals[previousId] ?? ex.sets.at(-1)!;
+  const original=ex.sets.at(-1)!;
+  const copied: SetTarget = {...original,kg: previous.kg, reps: original.targetMode === "range" || original.targetMode === "max" ? original.reps : previous.reps, seconds:original.targetMode === "max" ? original.seconds : previous.seconds, rpe:previous.rpe};
+  if(previous.rpe===undefined)delete copied.rpe;
+  return changeSessionExercise(session, exerciseId, { sets: [...ex.sets, copied] });
 }
 export function removeSessionSet(session: Session, exerciseId: string, index: number): Session {
   const ex = exercises(session.workout).find(ex => ex.id === exerciseId);
@@ -169,6 +210,7 @@ export function copyWorkout(workout: Workout): Workout {
       id: uid(),
       exercises: section.exercises.map((ex) => ({
         ...structuredClone(ex),
+        historyId: ex.historyId ?? ex.id,
         id: uid(),
       })),
     })),
@@ -181,9 +223,10 @@ export function fromSession(session: Session): Workout {
       const result = session.results[key(ex, index)];
       return result?.status === "done"
         ? {
+            ...set,
             kg: result.kg,
-            reps: result.reps,
-            seconds: result.seconds,
+            reps: set.targetMode === "range" || set.targetMode === "max" ? set.reps : result.reps,
+            seconds: set.targetMode === "max" ? set.seconds : result.seconds,
             rpe: result.rpe,
           }
         : set;
@@ -235,6 +278,7 @@ export function initialStore(): Store {
         exercises: [
           {
             id: "pullup",
+            loadType: "bodyweight",
             name: "Trazioni prone",
             mode: "weight",
             rest: 120,
@@ -295,12 +339,17 @@ export function validStore(value: unknown): value is Store {
   const s = value as Store;
   const finite = (n: unknown) =>
     typeof n === "number" && Number.isFinite(n) && n >= 0;
-  const target = (t: SetTarget) =>
+  const values = (t: SetTarget) =>
     t &&
     finite(t.kg) &&
     finite(t.reps) &&
     finite(t.seconds) &&
     (t.rpe === undefined || (finite(t.rpe) && t.rpe <= 10));
+  const target = (t:SetTarget) => values(t) &&
+    (t.targetMode === undefined || ["fixed","range","max"].includes(t.targetMode)) &&
+    (t.repsMax === undefined || (finite(t.repsMax) && t.repsMax >= t.reps)) &&
+    (t.targetMode === "range" || t.repsMax === undefined) &&
+    (t.targetMode !== "range" || t.repsMax !== undefined);
   const workout = (w: Workout) =>
     w &&
     typeof w.id === "string" &&
@@ -318,12 +367,15 @@ export function validStore(value: unknown): value is Store {
             ex &&
             typeof ex.id === "string" &&
             typeof ex.name === "string" &&
+            (ex.historyId === undefined || (typeof ex.historyId === "string" && ex.historyId.length > 0)) &&
+            (ex.loadType === undefined || ["weight","bodyweight"].includes(ex.loadType)) &&
+            (ex.perSide === undefined || typeof ex.perSide === "boolean") &&
             ["weight", "time"].includes(ex.mode) &&
             finite(ex.rest) &&
             typeof ex.rpe === "boolean" &&
             Array.isArray(ex.sets) &&
             ex.sets.length > 0 &&
-            ex.sets.every(target)
+            ex.sets.every(t=>target(t) && (ex.mode!=="time" || t.targetMode!=="range"))
         )
     );
   return (
@@ -350,7 +402,7 @@ export function validStore(value: unknown): value is Store {
         typeof session.results === "object" &&
         !Array.isArray(session.results) &&
         Object.values(session.results).every(
-          (r) => target(r) && ["done", "skipped"].includes(r.status)
+          (r) => values(r) && ["done", "skipped"].includes(r.status)
         ) &&
         (session.startedAt === undefined || finite(session.startedAt)) &&
         (session.endedAt === undefined || finite(session.endedAt))
