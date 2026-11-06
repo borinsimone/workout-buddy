@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "@/components/icon";
 import { NumberPicker } from "@/components/number-picker";
 import { RestTimer } from "@/components/rest-timer";
@@ -9,7 +9,8 @@ import { FeedbackAdmin } from "@/components/feedback-admin";
 import { SwipeRow } from "@/components/swipe-row";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { ExerciseGoalOptions, SetGoalFields } from "@/components/exercise-goals";
-import {timerValue,beginExerciseTimer,finishPreparation,resumeTimer,completedDuration,type SessionTimer} from "@/lib/session-timer";
+import {timerValue,beginExerciseTimer,finishPreparation,resumeTimer,measuredDuration,type SessionTimer} from "@/lib/session-timer";
+import { emptyRuntime, readSessionRuntimes, type ActualValues, type SessionRuntimes } from "@/lib/session-runtime";
 import { unlockTimerAudio, playTimerAlarm, playPreparationBeep } from "@/lib/timer-audio";
 import {
   clock,
@@ -93,7 +94,17 @@ export default function WorkoutApp() {
     [toast, setToast] = useState("");
   const [deleted, setDeleted] = useState<Session | null>(null),
     [filter, setFilter] = useState("");
-  const [timer, setTimer] = useState<Timer | null>(null);
+  const [sessionRuntimes, setSessionRuntimes] = useState<SessionRuntimes>({});
+  const selectedRuntime = store?.sessions.some(s => s.id === sessionId && s.status === "active") && Object.hasOwn(sessionRuntimes, sessionId)
+    ? sessionRuntimes[sessionId] : emptyRuntime;
+  const { timer, actuals } = selectedRuntime;
+  const setTimer = useCallback((timer: Timer | null) => {
+    if (sessionId) setSessionRuntimes(previous => ({ ...previous, [sessionId]: { ...(previous[sessionId] ?? emptyRuntime), timer } }));
+  }, [sessionId]);
+  const setActuals = (actuals: Record<string, ActualValues>) => {
+    if (sessionId) setSessionRuntimes(previous => ({ ...previous, [sessionId]: { ...(previous[sessionId] ?? emptyRuntime), actuals } }));
+  };
+  const [confirmFinish, setConfirmFinish] = useState(false);
   const [timerNotice, setTimerNotice] = useState("");
   const [removingLiveSet, setRemovingLiveSet] = useState<{exerciseId:string;index:number}|null>(null);
   const [editingSet, setEditingSet] = useState<{
@@ -108,12 +119,10 @@ export default function WorkoutApp() {
     seconds: number;
     rpe?: number;
     status: "done" | "skipped" | "pending";
+    error?: string;
   } | null>(null);
   const [now, setNow] = useState(0),
     [ready, setReady] = useState(false);
-  const [actuals, setActuals] = useState<
-    Record<string, { kg: number; reps: number; seconds: number; rpe?: number }>
-  >({});
   const fileRef = useRef<HTMLInputElement>(null),
     lastSave = useRef("");
   useEffect(() => {
@@ -129,42 +138,7 @@ export default function WorkoutApp() {
           const runtimeRaw = localStorage.getItem("workout-buddy-runtime");
           if (runtimeRaw) {
             try {
-              const runtime = JSON.parse(runtimeRaw) as {
-                sessionId: string;
-                timer: Timer | null;
-                actuals: typeof actuals;
-              };
-              if (
-                parsed.sessions.some(
-                  (s) => s.id === runtime.sessionId && s.status === "active"
-                )
-              ) {
-                setSessionId(runtime.sessionId);
-                const t = runtime.timer;
-                if (
-                  t &&
-                  ["rest", "prep", "exercise"].includes(t.kind) &&
-                  Number.isFinite(t.end) &&
-                  Number.isFinite(t.duration) &&
-                  t.duration >= 0 &&
-                  (t.countUp === undefined || typeof t.countUp === "boolean") &&
-                  (!t.countUp || t.kind!=="exercise" || (typeof t.startedAt==="number" && Number.isFinite(t.startedAt))) &&
-                  (t.paused === undefined ||
-                    (Number.isFinite(t.paused) && t.paused >= 0))
-                )
-                  setTimer(t);
-                if (
-                  runtime.actuals &&
-                  Object.values(runtime.actuals).every(
-                    (r) =>
-                      r &&
-                      [r.kg, r.reps, r.seconds].every(
-                        (n) => Number.isFinite(n) && n >= 0
-                      )
-                  )
-                )
-                  setActuals(runtime.actuals);
-              }
+              setSessionRuntimes(readSessionRuntimes(JSON.parse(runtimeRaw), parsed.sessions.filter(s => s.status === "active").map(s => s.id)));
             } catch {
               /* The saved session remains usable if timer state is corrupted. */
             }
@@ -232,16 +206,16 @@ export default function WorkoutApp() {
     }
   }, [ready, view, draft, scheduleDate, scheduleTime, sessionId]);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !store) return;
     try {
       localStorage.setItem(
         "workout-buddy-runtime",
-        JSON.stringify({ sessionId, timer, actuals })
+        JSON.stringify(Object.fromEntries(store.sessions.filter(s => s.status === "active" && Object.hasOwn(sessionRuntimes,s.id)).map(s => [s.id, sessionRuntimes[s.id]])))
       );
     } catch {
       /* Main data persistence reports storage errors to the user. */
     }
-  }, [ready, sessionId, timer, actuals]);
+  }, [ready, store, sessionRuntimes]);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
@@ -267,7 +241,7 @@ export default function WorkoutApp() {
       }
     }, Math.max(0, timer.end - Date.now()));
     return () => clearTimeout(timeout);
-  }, [timer, store?.timerSound, store?.timerVolume]);
+  }, [timer, setTimer, store?.timerSound, store?.timerVolume]);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 5000);
@@ -294,10 +268,7 @@ export default function WorkoutApp() {
       ),
     });
   const openSession = (s: Session) => {
-    if (s.id !== sessionId) {
-      setActuals({});
-      setTimer(null);
-    }
+    if (s.id !== sessionId) setTimerNotice("");
     setSessionId(s.id);
     navigate(
       s.status === "active"
@@ -466,7 +437,18 @@ export default function WorkoutApp() {
   const finishSet = (skip = false) => {
     setTimerNotice("");
     if (!session || !current) return;
-    const result = actuals[current.id] ?? current.target;
+    const draftResult = actuals[current.id];
+    const {kg, reps, rpe, seconds} = draftResult ?? current.target;
+    const duration = current.ex.mode === "time"
+      ? skip ? (draftResult?.durationEntered ? seconds : 0)
+        : measuredDuration(timer, now, current.ex.id, draftResult?.durationEntered ? seconds : undefined)
+      : seconds;
+    if (duration === null) {
+      setToast("Avvia il timer o inserisci la durata effettiva del set.");
+      return;
+    }
+    const recordedAt = Object.values(session.results).reduce((latest, result) => Math.max(latest, (result.recordedAt ?? 0) + 1), now);
+    const result = {kg, reps, rpe, seconds:duration, recordedAt};
     updateSession({
       results: {
         ...session.results,
@@ -474,7 +456,7 @@ export default function WorkoutApp() {
       },
     });
     setTimer(
-      !skip && current.ex.rest
+      !skip && current.ex.rest && slots.some(slot => slot.id !== current.id && !session.results[slot.id])
         ? {
             kind: "rest",
             exerciseId: current.ex.id,
@@ -497,6 +479,7 @@ export default function WorkoutApp() {
       ...result,
       ...actuals[id],
       [field]: Math.max(0, value),
+      ...(field === "seconds" ? {durationEntered:true} : {}),
     };
     if (result)
       updateSession({
@@ -512,10 +495,14 @@ export default function WorkoutApp() {
   const previousPerformance = session && activeEx ? lastPerformance(store.sessions,session,activeEx) : null;
   const previousSlot = [...slots]
     .reverse()
-    .find((slot) => session?.results[slot.id]);
+    .filter(slot => session?.results[slot.id])
+    .sort((a,b) => (session?.results[b.id]?.recordedAt ?? 0) - (session?.results[a.id]?.recordedAt ?? 0))[0];
   const openSetCorrection = (ex: Exercise, index: number) => {
     const id=key(ex,index), result=session?.results[id];
-    setEditingSet({id, name:ex.name, mode:ex.mode, loadType:ex.loadType, perSide:ex.perSide, index, ...(result ?? actuals[id] ?? ex.sets[index]), status:result?.status ?? "pending"});
+    const values = result ?? actuals[id] ?? ex.sets[index];
+    const seconds = ex.mode === "time" && result?.status !== "done"
+      ? (actuals[id]?.durationEntered ? actuals[id].seconds : 0) : values.seconds;
+    setEditingSet({id, name:ex.name, mode:ex.mode, loadType:ex.loadType, perSide:ex.perSide, index, ...values, seconds, status:result?.status ?? "pending"});
   };
   const applyLiveSession = (next: Session) => {
     if (next === session) return;
@@ -526,6 +513,15 @@ export default function WorkoutApp() {
       setTimerNotice("");
     }
   };
+  const resumable = [...store.sessions].filter(s => s.status === "active").sort((a,b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
+  const finishSession = () => {
+    if (!session || session.status !== "active") return;
+    updateSession({status:"completed",endedAt:Date.now()});
+    setTimer(null);
+    setConfirmFinish(false);
+    navigate("summary");
+  };
+  const pendingSets = slots.filter(slot => !session?.results[slot.id]).length;
   const currentDraftEx = draft
     ? exercises(draft).find((ex) => ex.id === editExercise)
     : undefined;
@@ -673,9 +669,8 @@ export default function WorkoutApp() {
               <button
                 className="button subtle"
                 onClick={() => {
-                  updateSession({ status: "completed", endedAt: Date.now() });
-                  setTimer(null);
-                  navigate("summary");
+                  if (pendingSets) setConfirmFinish(true);
+                  else finishSession();
                 }}
               >
                 Termina
@@ -690,6 +685,11 @@ export default function WorkoutApp() {
               </button>
             ) : null}
           </header>
+          {view !== "session" && resumable && (
+            <button type="button" className="button subtle full resume-workout" onClick={() => openSession(resumable)}>
+              <Icon name="play" /> <span><strong>Riprendi allenamento</strong><small>{resumable.workout.name}</small></span>
+            </button>
+          )}
           {view === "calendar" && hasDraft && (
             <div className="undo-banner">
               <Icon name="copy" />
@@ -1675,6 +1675,9 @@ export default function WorkoutApp() {
                       <span className="subtext">
                         {formatTarget(current.ex,current.target)}
                       </span>
+                      {current.ex.mode === "time" && !(timer?.kind === "exercise") && !actuals[current.id]?.durationEntered && (
+                        <span className="subtext">Avvia il timer o inserisci i secondi effettivi.</span>
+                      )}
                     </div>
                   )}
                   {timerNotice && (
@@ -1764,8 +1767,9 @@ export default function WorkoutApp() {
                           <NumberPicker
                             aria-label={`Secondi effettivi set ${index + 1}`}
                             type="number"
-                            min="0"
-                            value={value.seconds}
+                            min="1"
+                            value={result || actuals[id]?.durationEntered ? value.seconds : ""}
+                            placeholder="—"
                             onChange={(e) =>
                               setActual(
                                 id,
@@ -1818,18 +1822,7 @@ export default function WorkoutApp() {
                         <button
                           className="review-set"
                           key={id}
-                          onClick={() =>
-                            setEditingSet({
-                              id,
-                              name: ex.name,
-                              mode: ex.mode,
-                              loadType: ex.loadType,
-                              perSide: ex.perSide,
-                              index,
-                              ...(result ?? actuals[id] ?? target),
-                              status: result?.status ?? "pending",
-                            })
-                          }
+                          onClick={() => openSetCorrection(ex,index)}
                         >
                           <span>Set {index + 1}</span>
                           <span>
@@ -1851,35 +1844,7 @@ export default function WorkoutApp() {
                   <button
                     className="button primary full"
                     disabled={timer?.kind === "prep"}
-                    onClick={() => {
-                      setTimerNotice("");
-                      if (
-                        activeEx?.mode === "time" &&
-                        timer?.kind === "exercise"
-                      ) {
-                        const actual = actuals[current.id] ?? current.target;
-                        updateSession({
-                          results: {
-                            ...session.results,
-                            [current.id]: {
-                              ...actual,
-                              seconds: completedDuration(timer,now),
-                              status: "done",
-                            },
-                          },
-                        });
-                        setTimer(
-                          current.ex.rest
-                            ? {
-                                kind: "rest",
-                                exerciseId: current.ex.id,
-                                duration: current.ex.rest,
-                                end: now + current.ex.rest * 1000,
-                              }
-                            : null
-                        );
-                      } else finishSet();
-                    }}
+                    onClick={() => finishSet()}
                   >
                     <Icon name="check" />
                     Completa set {current.index + 1}
@@ -1888,21 +1853,10 @@ export default function WorkoutApp() {
                     <button
                       className="button subtle"
                       disabled={!previousSlot}
-                      onClick={() => {
-                        if (previousSlot) {
-                          const results = { ...session.results };
-                          const previous = results[previousSlot.id];
-                          delete results[previousSlot.id];
-                          setActuals({
-                            ...actuals,
-                            [previousSlot.id]: previous,
-                          });
-                          updateSession({ results });
-                          setTimer(null);
-                        }
-                      }}
+                      aria-label="Correggi ultimo set"
+                      onClick={() => previousSlot && openSetCorrection(previousSlot.ex,previousSlot.index)}
                     >
-                      Correggi ultimo
+                      Correggi
                     </button>
                     <button
                       className="button danger"
@@ -1917,16 +1871,10 @@ export default function WorkoutApp() {
                   <Icon name="check" size={32} />
                   <h2>Tutti i set registrati.</h2>
                   <p>Termina per salvare il riepilogo.</p>
+                  {previousSlot && <button type="button" className="button subtle full" onClick={() => openSetCorrection(previousSlot.ex,previousSlot.index)}>Correggi ultimo set</button>}
                   <button
                     className="button primary full"
-                    onClick={() => {
-                      updateSession({
-                        status: "completed",
-                        endedAt: Date.now(),
-                      });
-                      setTimer(null);
-                      navigate("summary");
-                    }}
+                    onClick={finishSession}
                   >
                     Termina allenamento
                   </button>
@@ -2408,6 +2356,7 @@ export default function WorkoutApp() {
           </button>
         ))}
       </nav>
+      {confirmFinish && <ConfirmationDialog title="Terminare l’allenamento?" message={`Restano ${pendingSets} set da fare. Se termini ora, il riepilogo conterrà solo i risultati già registrati.`} cancelLabel="Continua" confirmLabel="Termina comunque" onCancel={() => setConfirmFinish(false)} onConfirm={finishSession} />}
       {removingLiveSet && <ConfirmationDialog
         message={`Il set ${removingLiveSet.index + 1} e il suo eventuale risultato verranno rimossi da questa sessione.`}
         onCancel={() => setRemovingLiveSet(null)}
@@ -2496,10 +2445,14 @@ export default function WorkoutApp() {
               if (!session) return;
               const results = { ...session.results };
               const { id, kg, reps, seconds, rpe, status } = editingSet;
+              if (status === "done" && editingSet.mode === "time" && seconds <= 0) {
+                setEditingSet({...editingSet, error:"Inserisci la durata effettiva prima di segnare il set come eseguito."});
+                return;
+              }
               if (status === "pending") {
                 delete results[id];
-                setActuals({ ...actuals, [id]: { kg, reps, seconds, rpe } });
-              } else results[id] = { kg, reps, seconds, rpe, status };
+                setActuals({ ...actuals, [id]: { kg, reps, seconds, rpe, durationEntered: editingSet.mode === "time" && seconds > 0 } });
+              } else results[id] = { kg, reps, seconds, rpe, status, recordedAt: session.results[id]?.recordedAt ?? Date.now() };
               updateSession({ results });
               setEditingSet(null);
               if (
@@ -2535,14 +2488,15 @@ export default function WorkoutApp() {
                     : "Durata effettiva (secondi)"}
                   <NumberPicker
                     type="number"
-                    min="0"
+                    min={field === "seconds" ? "1" : "0"}
                     step={field === "kg" ? "0.5" : "1"}
-                    required
-                    value={editingSet[field as "kg" | "reps" | "seconds"]}
+                    placeholder={field === "seconds" ? "—" : undefined}
+                    value={field === "seconds" && !editingSet.seconds ? "" : editingSet[field as "kg" | "reps" | "seconds"]}
                     onChange={(e) =>
                       setEditingSet({
                         ...editingSet,
                         [field]: Math.max(0, Number(e.target.value)),
+                        error: undefined,
                       })
                     }
                   />
@@ -2584,6 +2538,7 @@ export default function WorkoutApp() {
                 <option value="pending">Da eseguire</option>
               </select>
             </label>
+            {editingSet.error && <p role="alert" className="note">{editingSet.error}</p>}
             <button className="button primary full" type="submit">
               <Icon name="check" />
               Salva correzione

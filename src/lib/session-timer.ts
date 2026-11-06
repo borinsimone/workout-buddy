@@ -58,3 +58,10 @@ export function completedDuration(timer: SessionTimer, now: number) {
   const value = timerValue(timer, now);
   return timer.countUp ? value : Math.max(0, timer.duration - value);
 }
+export function measuredDuration(timer: SessionTimer | null, now: number, exerciseId: string, manual?: number): number | null {
+  if (timer?.kind === "prep") return null;
+  if (manual !== undefined && Number.isFinite(manual) && manual > 0) return manual;
+  if (timer?.kind !== "exercise" || (timer.exerciseId && timer.exerciseId !== exerciseId)) return null;
+  const seconds = completedDuration(timer, now);
+  return seconds > 0 ? seconds : null;
+}

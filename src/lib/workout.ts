@@ -24,7 +24,7 @@ export type Workout = {
   notes: string;
   sections: Section[];
 };
-export type Result = Pick<SetTarget, "kg" | "reps" | "seconds" | "rpe"> & { status: "done" | "skipped" };
+export type Result = Pick<SetTarget, "kg" | "reps" | "seconds" | "rpe"> & { status: "done" | "skipped"; recordedAt?: number };
 export type Session = {
   id: string;
   date: string;
@@ -402,7 +402,7 @@ export function validStore(value: unknown): value is Store {
         typeof session.results === "object" &&
         !Array.isArray(session.results) &&
         Object.values(session.results).every(
-          (r) => values(r) && ["done", "skipped"].includes(r.status)
+          (r) => values(r) && ["done", "skipped"].includes(r.status) && (r.recordedAt === undefined || finite(r.recordedAt))
         ) &&
         (session.startedAt === undefined || finite(session.startedAt)) &&
         (session.endedAt === undefined || finite(session.endedAt))

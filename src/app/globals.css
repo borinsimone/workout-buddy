@@ -1931,9 +1931,8 @@ i.completed {
 .session-actions .two-buttons {
   margin: 0;
 }
-.session-actions .two-buttons > button:first-child {
-  display: none;
-}
+.resume-workout { justify-content: flex-start; text-align: left; border: 1px solid var(--lime); }
+.resume-workout small { display: block; margin-top: 3px; color: var(--muted); }
 .session-actions .two-buttons .button {
   min-height: 54px;
 }
@@ -2047,6 +2046,8 @@ i.completed {
   .session-actions > .button {
     font-size: 14px;
     min-height: 52px;
+    min-width: 0;
+    padding-inline: 8px;
   }
   .session-actions .two-buttons .button {
     min-height: 52px;

@@ -3,10 +3,16 @@ import { useEffect, useRef } from "react";
 
 export function ConfirmationDialog({
   message,
+  title = "Rimuovere il set?",
+  confirmLabel = "Rimuovi set",
+  cancelLabel = "Annulla",
   onConfirm,
   onCancel,
 }: {
   message: string;
+  title?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -18,11 +24,11 @@ export function ConfirmationDialog({
     <dialog
       ref={ref}
       className="session-exercise-dialog"
-      aria-label="Conferma rimozione set"
+      aria-label={title}
       onCancel={onCancel}
       onClose={onCancel}
     >
-      <h2>Rimuovere il set?</h2>
+      <h2>{title}</h2>
       <p>{message}</p>
       <div className="two-buttons">
         <button
@@ -31,10 +37,10 @@ export function ConfirmationDialog({
           className="button subtle"
           onClick={onCancel}
         >
-          Annulla
+          {cancelLabel}
         </button>
         <button type="button" className="button danger" onClick={onConfirm}>
-          Rimuovi set
+          {confirmLabel}
         </button>
       </div>
     </dialog>
